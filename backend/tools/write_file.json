@@ -1,0 +1,15 @@
+{
+  "type": "function",
+  "function": {
+    "name": "write_file",
+    "description": "Create a new file or overwrite an existing file with the given complete content.",
+    "parameters": {
+      "type": "object",
+      "properties": {
+        "target_file": {"type": "string", "description": "Absolute path, or path relative to the workspace root, of the file to write."},
+        "content": {"type": "string", "description": "The full content to write to the file."}
+      },
+      "required": ["target_file", "content"]
+    }
+  }
+}

@@ -1,0 +1,17 @@
+{
+  "type": "function",
+  "function": {
+    "name": "edit_file",
+    "description": "Replace an exact substring in a file. old_string must appear exactly once in the file.",
+    "parameters": {
+      "type": "object",
+      "properties": {
+        "target_file": {"type": "string", "description": "Absolute path, or path relative to the workspace root, of the file to edit."},
+        "old_string": {"type": "string", "description": "The exact text to replace (must be unique in the file)."},
+        "new_string": {"type": "string", "description": "The text to replace it with."}
+      },
+      "required": ["target_file", "old_string", "new_string"]
+    }
+  }
+}
+

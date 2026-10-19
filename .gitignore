@@ -1,0 +1,10 @@
+.env
+.env.*
+!.env.example
+client/node_modules/
+
+# Local-only notes
+/超级额外说明.md
+
+# macOS metadata
+.DS_Store

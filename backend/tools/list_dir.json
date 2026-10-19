@@ -1,0 +1,15 @@
+{
+  "type": "function",
+  "function": {
+    "name": "list_dir",
+    "description": "List the entries (files and sub-directories) of a directory.",
+    "parameters": {
+      "type": "object",
+      "properties": {
+        "target_directory": {"type": "string", "description": "Absolute path, or path relative to the workspace root, of the directory to list. Defaults to the workspace root."}
+      },
+      "required": []
+    }
+  }
+}
+

@@ -1,0 +1,14 @@
+{
+  "type": "function",
+  "function": {
+    "name": "run_command",
+    "description": "Execute a non-interactive shell command in the workspace and return its stdout, stderr and exit code.",
+    "parameters": {
+      "type": "object",
+      "properties": {
+        "command": {"type": "string", "description": "The shell command to run."}
+      },
+      "required": ["command"]
+    }
+  }
+}

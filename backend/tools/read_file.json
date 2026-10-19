@@ -1,0 +1,16 @@
+{
+  "type": "function",
+  "function": {
+    "name": "read_file",
+    "description": "Read a file from the local filesystem and return its contents with line numbers (cat -n style). Optionally read a slice with offset/limit.",
+    "parameters": {
+      "type": "object",
+      "properties": {
+        "target_file": {"type": "string", "description": "Absolute path, or path relative to the workspace root, of the file to read."},
+        "offset": {"type": "integer", "description": "1-based line number to start from. Optional."},
+        "limit": {"type": "integer", "description": "Max number of lines to read. Optional."}
+      },
+      "required": ["target_file"]
+    }
+  }
+}
