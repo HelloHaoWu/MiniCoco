@@ -4,6 +4,7 @@ set -euo pipefail
 project_root="$(cd "$(dirname "$0")" && pwd)"
 check_dir="$(mktemp -d "${TMPDIR:-/tmp}/minicoco-check.XXXXXX")"
 trap 'rm -rf "$check_dir"' EXIT
+bash "$project_root/check_default_deps.sh"
 (
     cd "$project_root/backend"
     go test -race -cover ./...

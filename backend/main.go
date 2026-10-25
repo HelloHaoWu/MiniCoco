@@ -31,10 +31,14 @@ func main() {
 		log.Fatal(err)
 	}
 	var err error
-	activeSessions, err = newSessionService(getenv("MINICOCO_DATA_DIR", "data"))
+	var closeStores func()
+	startup, stopStartup := context.WithTimeout(context.Background(), 15*time.Second)
+	activeSessions, closeStores, err = wireStores(startup, getenv("MINICOCO_DATA_DIR", "data"))
+	stopStartup()
 	if err != nil {
 		log.Fatal(err)
 	}
+	defer closeStores()
 	host := getenv("MINICOCO_HOST", "127.0.0.1")
 	port := getenv("MINICOCO_PORT", "8017")
 	addr := host + ":" + port
@@ -119,6 +123,12 @@ func handleChatStream(w http.ResponseWriter, r *http.Request) {
 	h.Set("Content-Type", "text/event-stream")
 	h.Set("Cache-Control", "no-cache")
 	h.Set("X-Accel-Buffering", "no")
+	emitterID, err := storeID("e_")
+	if err != nil {
+		writeJSON(w, 500, map[string]string{"error": "cannot allocate emitter"})
+		return
+	}
+	h.Set("X-Emitter-Id", emitterID)
 	w.WriteHeader(http.StatusOK)
 
 	emit := func(ev Event) {
@@ -135,7 +145,9 @@ func handleChatStream(w http.ResponseWriter, r *http.Request) {
 		}
 		flusher.Flush()
 	}
-	processRequestContext(ctx, req, emit)
+	unregister := activeEmitters.register(emitterID, emit)
+	defer unregister()
+	processRequestContext(ctx, req, func(event Event) { activeEmitters.emit(emitterID, event) })
 }
 
 func writeJSON(w http.ResponseWriter, code int, payload any) {
