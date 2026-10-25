@@ -1,4 +1,4 @@
-# MiniCoco - 最小 Codig Agent Harness 实现(双端：Go后端 + TypeScript前端)
+# MiniCoco - 最小 Coding Agent Harness 实现（Go 后端 + TypeScript 客户端）
 
 一个**可运行**的最小 coding agent，使用双端架构，以方便后端做独立服务扩展（"号池灵活路由"等功能）；
 
@@ -16,7 +16,8 @@
 
 ## 环境要求
 - **Go** ≧ 1.22 (跑后端)
-- **Node** ≧ 22.6 (跑前端: 用 Node 原生 TypeScript 支持, **无需编译**, 直接 `node src/cli.ts`)
+- **Node** ≧ 24（客户端使用原生 TypeScript 类型擦除，无需编译）
+- 首次进行开发检查：在 `client/` 执行 `npm ci`。TypeScript 和 Node 类型声明仅用于开发，运行时仍只使用内置模块。
 
 ## 运行
 
@@ -59,11 +60,11 @@ you> 把 calc.py 里的 bug 修掉, 并跑一下测试
 
 接真实模型后, agent 会真的调用 `read_file` / `edit_file` / `run_command` 等工具改你的代码、跑你的命令。
 
-**DeepSeek 接入（已实测跑通）**：
+**默认模型配置**：
 
 - `LLM_BASE_URL=https://api.deepseek.com/v1`
-- 可用 `LLM_MODEL`：`deepseek-flash`、`deepseek-v4-pro`（若传了不存在的名字，后端会把 API 的 400 原样透传为 `[backend error] ...`，并提示支持的名字）。
-- 模型也可在客户端按次覆盖：`./run_client.sh "..." --model deepseek-v4-pro`（请求体里的 `model` 优先于后端的 `LLM_MODEL` 默认值）。
+- 默认 `LLM_MODEL=deepseek-flash`；实际可用模型由供应商和账号决定，上游错误会作为失败返回。
+- 模型也可在客户端按次覆盖：`./run_client.sh "..." --model your-model`（请求体里的 `model` 优先于后端的 `LLM_MODEL` 默认值）。
 - key 不要写进脚本/仓库：用 `export LLM_API_KEY=sk-xxx` 或放进被 `.gitignore` 忽略的 `.env`。
 - 默认关闭 DeepSeek 思考模式，以适配当前仅回传文本和工具结果的客户端；请求超时为 120 秒。
 
@@ -74,10 +75,32 @@ you> 把 calc.py 里的 bug 修掉, 并跑一下测试
 node client/src/selftest.ts
 ```
 
+### 4）开发检查与回归测试
+
+```bash
+npm --prefix client ci
+bash check.sh
+```
+
+`check.sh` 执行 Go 竞态测试、静态检查、构建，以及客户端类型检查、工具自测和回归测试。
+回归测试使用临时工作区、假密钥和本机模拟模型，包含真实 Go 后端与 CLI 的
+“读文件 → 编辑 → 执行测试 → 最终回答”四轮流程，不调用付费模型。
+
+### 5）运行结果、取消与资源限制
+
+- `Conversation.run()` 返回 `{status, text, rounds, message?}`，状态包括 `completed`、`failed`、`exhausted`、`cancelled`。CLI 仅为正常完成打印答案，失败或耗尽返回退出码 1，取消返回 130。
+- `--max-rounds` 为 1—100 的整数，默认 25；最后一轮若仍要求工具则停止，不再执行该批工具。
+- 运行中按 Ctrl+C 取消当前请求或命令；客户端断连也会取消后端模型请求。macOS/Linux 会终止命令进程组，Windows 目前只终止直接子进程。
+- 会话最多 1 MiB JSON 或 512 条消息，达到预算后需新建会话；工具执行前预留结果预算，不自动删除历史中的工具调用。
+- 单个文本文件读写最多 1 MiB；工具结果最多 64 KiB（同时限制 JSON 编码大小），截断时明确标记；命令输出超限则终止该命令并返回工具错误。
+- `read_file` 每次最多返回 2000 行；`list_dir` 最多列出 2000 项。`grep` 最多遍历 2000 项、32 层、8 MiB 文件内容、返回 200 个匹配；跳过符号链接、过大文件、二进制内容和超过 4096 字符的行，并报告限制。
+- 搜索在独立 Worker 中执行，5 秒超时并支持取消；命令超时 120 秒；模型超时 120 秒，客户端请求超时 125 秒。
+- 后端请求体最多 2 MiB，响应流最多 4 MiB，单个 SSE 帧最多 1 MiB，每轮最多 16 个工具调用。无效参数、异常流、缺失结束标记和不一致的结束原因都会失败，工具调用在整批验证通过后才发送给客户端。
+
 ## 目录结构
 
 ```
-Mininum_Coco/
+MiniCoco/
 ├── backend/                      # ← 真实后端映射（后端：Go，无状态每轮代理）
 │   ├── main.go                   #   HTTP + SSE 入口 /chat/stream
 │   ├── agentloop.go              #   processRequest：单轮编排（无 for 循环）
@@ -97,7 +120,7 @@ Mininum_Coco/
 │       ├── protocol.ts           #   与后端共用的事件类型
 │       ├── selftest.ts           #   本地工具离线自测
 │       └── tools/
-│           ├── index.ts          #     createHandler 分发（switch）
+│           ├── index.ts          #     createHandler 注册表
 │           ├── base.ts           #     Handler 基类 + 工作区沙箱
 │           └── readFile / writeFile / editFile / listDir / grep / runCommand
 ├── run_backend.sh / run_client.sh
@@ -107,11 +130,12 @@ Mininum_Coco/
 
 - **历史放客户端**：这里让 client 持有完整 `messages` 并每轮回传，后端因此**完全无状态**。复杂前后端设计把历史存在 MongoDB，client 只回传新 query + 工具结果。两者「后端按轮组 prompt」的本质一致。
 - **原生 function calling**：直接用模型的 `tools` / `tool_calls`。真实前后端设计 还支持 XML 风格工具协议、prompt cache、ABTest 分流等。
-- **砍掉的工程增强**：上下文压缩、重试退避、非流式兜底、Langfuse tracing、权限审批、RSS 保护、memory、多模型适配、subagent / MCP 等。这些正是真实代码膨胀到两万多行、而内核只有两三千行的原因。
+- **保持最小实现**：暂不引入上下文压缩、自动重试、非流式兜底、数据库、tracing、权限审批、memory、subagent / MCP。使用明确的预算和失败状态控制基本边界。
 - **工具集**：只保留 6 个最核心的（read/write/edit/list/grep/run_command）。加工具 = 在 `backend/tools/` 放一个 JSON + 在 `client/src/tools/` 写一个 Handler 并在 `createHandler` 注册。
 - **语言**：真实后端是 Java；这里用 Go 保持「编译型、单二进制、无框架」的最小形态，前端沿用 TypeScript。
 
 ## 安全说明
 
-- 后端只监听 `127.0.0.1`，**无鉴权**，是本地开发用的 harness，**切勿暴露到网络**。
-- client 的工具会在你的机器上**读写文件、执行任意 shell 命令**（coding agent 的固有能力）。工具被限制在 `--workspace` 指定的目录内（`base.ts` 做了路径逃逸校验），`run_command` 有 120s 超时，但它仍可在该工作区内执行任意命令——请只在可信工作区、对可信模型使用。
+- 后端默认监听 `127.0.0.1`，**无鉴权**，用于本地开发。`MINICOCO_HOST` 可以覆盖监听地址，当前实现不适合直接暴露到网络。
+- 文件工具拒绝路径越界和路径中的符号链接，写入通过同目录临时文件替换完成。这是应用层路径检查，不能抵御其他进程并发恶意替换父目录。
+- `run_command` 提供可信本地 shell 执行能力，`--workspace` 只设置它的工作目录，**不限制它访问工作区以外的文件或网络**。当前没有容器或操作系统级沙箱。

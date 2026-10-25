@@ -2,13 +2,18 @@
   "type": "function",
   "function": {
     "name": "run_command",
-    "description": "Execute a non-interactive shell command in the workspace and return its stdout, stderr and exit code.",
+    "description": "Execute a trusted non-interactive shell command with cwd set to the workspace. This is not an OS sandbox: commands can access other paths and the network. Timeout: 120s; combined stdout/stderr cap: 64 KiB.",
     "parameters": {
       "type": "object",
       "properties": {
-        "command": {"type": "string", "description": "The shell command to run."}
+        "command": {
+          "type": "string",
+          "description": "The shell command to run."
+        }
       },
-      "required": ["command"]
+      "required": [
+        "command"
+      ]
     }
   }
 }

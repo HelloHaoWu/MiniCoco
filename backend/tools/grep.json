@@ -2,15 +2,22 @@
   "type": "function",
   "function": {
     "name": "grep",
-    "description": "Search file contents for a regular expression and return matching lines with file path and line number.",
+    "description": "Search file contents for a regular expression and return matching lines with file path and line number. Bounded search: at most 200 matches, 2000 entries, 8 MiB input and 5 seconds; skips symlinks, large/binary files and very long lines.",
     "parameters": {
       "type": "object",
       "properties": {
-        "pattern": {"type": "string", "description": "The regular expression to search for."},
-        "path": {"type": "string", "description": "Directory or file to search in. Defaults to the workspace root."}
+        "pattern": {
+          "type": "string",
+          "description": "The regular expression to search for."
+        },
+        "path": {
+          "type": "string",
+          "description": "Directory or file to search in. Defaults to the workspace root."
+        }
       },
-      "required": ["pattern"]
+      "required": [
+        "pattern"
+      ]
     }
   }
 }
-

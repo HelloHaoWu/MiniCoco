@@ -3,12 +3,18 @@
     "version": "0.1.0",
     "private": true,
     "type": "module",
-    "description": "Minimal coding-agent client (TypeScript): agent loop + local tool execution. Runs on Node 22.6+ native TypeScript (no build step).",
+    "description": "Minimal coding-agent client: agent loop and local tools on Node 24+.",
     "engines": {
-        "node": ">=22.6"
+        "node": ">=24"
     },
     "scripts": {
         "start": "node src/cli.ts",
-        "selftest": "node src/selftest.ts"
+        "selftest": "node src/selftest.ts",
+        "test": "node --test src/*.test.ts",
+        "typecheck": "tsc --noEmit"
+    },
+    "devDependencies": {
+        "@types/node": "24.19.2",
+        "typescript": "5.9.3"
     }
 }
