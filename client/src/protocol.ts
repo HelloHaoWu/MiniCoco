@@ -24,8 +24,7 @@ export interface Event {
     message?: string;
     code?: 'upstream_5xx' | 'upstream_429' | 'rate_limited' | 'quota_exhausted' |
         'need_compression' | 'bad_request' | 'upstream_timeout' | 'config' | 'internal';
-    // Optional for older servers. Part 1 keeps all errors fatal in the client;
-    // Part 2 will use this metadata, conservatively treating missing as false.
+    // Optional for older servers; absent metadata is conservatively fatal.
     retryable?: boolean;
 }
 

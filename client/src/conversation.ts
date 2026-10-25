@@ -1,4 +1,6 @@
-import {runRound} from './executor.ts';
+import {runRoundWithRetry, NOOP_COMPRESSION, type CompressionHook, type RetryDependencies} from './retry.ts';
+import {RETRY_POLICY, type RetryPolicy} from './tuning.ts';
+import {RoundError} from './roundError.ts';
 import {createHandler, HandlerContext, ToolError} from './tools/index.ts';
 import {boundedOutput} from './tools/base.ts';
 import {FINISH, type Message, type ToolCall} from './protocol.ts';
@@ -11,6 +13,7 @@ export interface RunResult {
     rounds: number;
     message?: string;
 }
+export interface ConversationOptions { retryPolicy?: RetryPolicy; compressionHook?: CompressionHook; retryDependencies?: RetryDependencies; }
 
 // The client owns history and the tool loop; the backend handles one round.
 export class Conversation {
@@ -21,8 +24,9 @@ export class Conversation {
     ctx: HandlerContext;
     messages: Message[] = [];
     private running = false;
+    private options: ConversationOptions;
 
-    constructor(serverUrl: string, workspace: string, model = '', maxRounds = 25) {
+    constructor(serverUrl: string, workspace: string, model = '', maxRounds = 25, options: ConversationOptions = {}) {
         const url = new URL(serverUrl);
         if (!['http:', 'https:'].includes(url.protocol)) throw new Error('server must use HTTP or HTTPS');
         if (!Number.isSafeInteger(maxRounds) || maxRounds < 1 || maxRounds > 100) throw new Error('maxRounds must be an integer between 1 and 100');
@@ -31,14 +35,13 @@ export class Conversation {
         this.workspace = this.ctx.workspace;
         this.model = model;
         this.maxRounds = maxRounds;
+        this.options = options;
     }
 
-    private append(messages: Message[]): void {
-        const next = [...this.messages, ...messages];
+    private checkBudget(next: Message[]): void {
         if (next.length > MAX_HISTORY_MESSAGES || Buffer.byteLength(JSON.stringify(next)) > MAX_HISTORY_BYTES) {
             throw new Error('conversation budget reached (1 MiB / 512 messages); start a new conversation');
         }
-        this.messages.push(...messages);
     }
 
     async run(query: string, signal?: AbortSignal): Promise<RunResult> {
@@ -49,22 +52,23 @@ export class Conversation {
         try {
             signal?.throwIfAborted();
             if (typeof query !== 'string' || !query.trim()) throw new Error('query must be a non-empty string');
-            this.append([{role: 'user', content: query}]);
+            let pending: Message[] = [...this.messages, {role: 'user', content: query}];
+            this.checkBudget(pending);
             for (rounds = 1; rounds <= this.maxRounds; rounds++) {
                 signal?.throwIfAborted();
                 process.stdout.write(`\n--- round ${rounds} ---\n`);
-                const result = await runRound(this.serverUrl, this.messages, this.workspace, this.model, signal);
+                const result = await runRoundWithRetry({serverUrl: this.serverUrl, messages: pending, workspace: this.workspace, model: this.model}, this.options.retryPolicy ?? RETRY_POLICY, signal, this.options.compressionHook ?? NOOP_COMPRESSION, this.options.retryDependencies);
                 if (result.finish === FINISH.STOP) {
-                    this.append([result.assistant]);
+                    const next = [...result.messages, result.assistant];
+                    this.checkBudget(next);
+                    this.messages = next;
                     return {status: 'completed', text: result.assistant.content ?? '', rounds};
                 }
                 // Never execute a batch if no model round remains to inspect its results.
                 if (rounds === this.maxRounds) return {status: 'exhausted', text: '', rounds, message: `reached maxRounds=${this.maxRounds}; last tool batch was not executed`};
                 // Reserve space before any side effects. Tool results are bounded to 64 KiB.
                 const reserved: Message[] = [result.assistant, ...result.toolCalls.map(call => ({role: 'tool', tool_call_id: call.id, content: ' '.repeat(64 * 1024)}))];
-                const checkpoint = this.messages.length;
-                this.append(reserved);
-                this.messages.length = checkpoint;
+                this.checkBudget([...result.messages, ...reserved]);
                 const replies: Message[] = [];
                 for (const call of result.toolCalls) {
                     if (signal?.aborted) {
@@ -77,12 +81,16 @@ export class Conversation {
                         }
                     }
                 }
-                this.append([result.assistant, ...replies]);
+                const next = [...result.messages, result.assistant, ...replies];
+                this.checkBudget(next);
+                this.messages = next;
+                pending = this.messages;
                 signal?.throwIfAborted();
             }
             throw new Error('unreachable round state');
         } catch (e) {
-            return {status: signal?.aborted ? 'cancelled' : 'failed', text: '', rounds, message: (e as Error).message};
+            const message = e instanceof RoundError ? `${e.code ?? e.kind}: ${e.message} after ${e.attempts ?? 1} tries` : (e as Error).message;
+            return {status: signal?.aborted ? 'cancelled' : 'failed', text: '', rounds, message};
         } finally { this.ctx.signal = undefined; this.running = false; }
     }
 

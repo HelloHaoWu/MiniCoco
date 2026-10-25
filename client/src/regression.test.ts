@@ -180,7 +180,7 @@ test('CLI consumes all piped queries, returns failures as nonzero, and validates
         const result = await cli(['--workspace', ws, '--server', url], 'first\nsecond\nexit\n');
         assert.equal(result.code, 0, result.stderr); assert.equal(result.stdout.match(/=== answer ===/g)?.length, 2);
     });
-    await server((req, res) => {res.writeHead(500);res.end();}, async url => {
+    await server((req, res) => {res.writeHead(400);res.end();}, async url => {
         assert.equal((await cli(['query', '--workspace', ws, '--server', url])).code, 1);
     });
     for (const args of [['--workspace'], ['--max-rounds', 'NaN'], ['--max-rounds', '0'], ['--unknown']]) {
@@ -226,4 +226,26 @@ test('Go proxy and real CLI complete read → edit → command → final respons
             assert.equal(received[3].filter(message => message.role === 'tool').length, 3);
         } finally {child.kill('SIGTERM');await exit;}
     });
+}));
+
+test('Go flaky backend and real CLI recover with default cancellable backoff', {timeout: 30_000}, () => fixture(async (ws, ctx, temp) => {
+    const binary = path.join(temp, 'backend');
+    const build = spawnSync('go', ['build', '-o', binary, '.'], {cwd: path.join(project, 'backend'), encoding: 'utf8'});
+    assert.equal(build.status, 0, build.stderr);
+    const reservation = http.createServer();reservation.listen(0, '127.0.0.1');await once(reservation, 'listening');
+    const port = (reservation.address() as import('node:net').AddressInfo).port;await new Promise<void>(resolve => reservation.close(() => resolve()));
+    const child = spawn(binary, [], {cwd: temp, env: {...process.env, LLM_PROVIDER: 'mock', LLM_API_KEY: '', LLM_MOCK_MODE: 'flaky', LLM_MOCK_FLAKY_FAILS: '2', MINICOCO_HOST: '127.0.0.1', MINICOCO_PORT: String(port)}, stdio: 'ignore'});
+    const exit = once(child, 'exit');
+    try {
+        let ready = false;
+        for (let i = 0; i < 100; i++) {
+            try {if ((await fetch(`http://127.0.0.1:${port}/health`)).ok) {ready = true;break;}} catch {}
+            await new Promise(resolve => setTimeout(resolve, 20));
+        }
+        assert(ready);
+        const result = await cli(['inspect workspace', '--workspace', ws, '--server', `http://127.0.0.1:${port}`]);
+        assert.equal(result.code, 0, result.stderr);assert.match(result.stdout, /Done\. I inspected/);
+        assert.equal(result.stderr.match(/\[retry\]/g)?.length, 2);
+        assert.equal(result.stdout.match(/→ list_dir/g)?.length, 1);
+    } finally {child.kill('SIGTERM');await exit;}
 }));

@@ -47,9 +47,7 @@ mock 模型走确定性的两轮循环 (list_dir -> 给结论), 证明闭环跑�
 # 终端 A：该进程前两次模型请求失败，之后恢复正常 mock
 LLM_PROVIDER=mock LLM_MOCK_MODE=flaky LLM_MOCK_FLAKY_FAILS=2 bash run_backend.sh
 
-# 终端 B：独立执行三次，前两次失败，第三次完成 list_dir → 回答闭环
-./run_client.sh "列出当前文件" --workspace .
-./run_client.sh "列出当前文件" --workspace .
+# 终端 B：一次运行，自动从前两次瞬时故障恢复，完成 list_dir → 回答闭环
 ./run_client.sh "列出当前文件" --workspace .
 ```
 
@@ -57,8 +55,15 @@ LLM_PROVIDER=mock LLM_MOCK_MODE=flaky LLM_MOCK_FLAKY_FAILS=2 bash run_backend.sh
 失败预算在后端启动时初始化、每进程一份，并发时原子消耗；`/health` 不消耗预算，恢复后不会在下一轮重新注入失败。
 非法 mock 配置会在启动时失败，真实模型 provider 忽略这些 mock 设置。这两个参数也可通过本地 `.env` 配置，导出的环境变量优先。
 
-本阶段只增加后端分类与故障源，**客户端仍把错误当作失败返回，不会自动重试**。
-可取消退避和自动重试属于 Phase 1 Part 2，非流式兜底属于 Part 3，当前均未实现。
+客户端已支持类型化错误和可取消的自动重试：只有瞬时故障进入退避，fatal、用户取消和已成功轮不重试。
+默认首次请求之外最多重试 7 次（最多 8 次流式尝试），基础退避依次为 3/6/12/24/30/30/30 秒，并增加 0—25% 正向抖动。每次请求单独计算 125 秒超时；它不是整轮重试的总超时。
+每次重试都会标记丢弃失败尝试；已显示的部分文本可能仍留在终端，但失败尝试的 assistant/tool 批次不会进入会话历史，工具执行不会重试。
+非流式兜底属于 Phase 1 Part 3，当前未实现。
+
+压缩接缝通过 `CompressionHook` 注入，默认实现明确报 `cannot_compress`，不提供压缩算法。
+钩子操作历史副本，必须减小序列化字节数、保留当前输入及完整工具批次；这允许摘要后消息条数不变。
+只有该轮成功并通过预算检查后才采纳新历史；压缩最多 3 次，不占瞬时故障重试次数，钩子等待也支持取消。
+新用户输入同样先暂存，失败轮不会把它或不完整模型输出提交到历史；已经执行过的前序工具批次保留真实记录。
 
 错误 SSE 事件增加 `code`、`retryable`；`retryable:false` 会显式输出，随后仍发 `done(error)`：
 
