@@ -22,6 +22,11 @@ export interface Event {
     arguments?: Record<string, unknown>;
     finish_reason?: string;
     message?: string;
+    code?: 'upstream_5xx' | 'upstream_429' | 'rate_limited' | 'quota_exhausted' |
+        'need_compression' | 'bad_request' | 'upstream_timeout' | 'config' | 'internal';
+    // Optional for older servers. Part 1 keeps all errors fatal in the client;
+    // Part 2 will use this metadata, conservatively treating missing as false.
+    retryable?: boolean;
 }
 
 export interface ToolCall {

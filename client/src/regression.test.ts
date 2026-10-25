@@ -129,7 +129,7 @@ test('SSE parses split UTF-8/multiline frames and rejects malformed/incomplete/o
 for (const [name, code, type, body] of [
     ['HTTP failure', 500, 'application/json', '{}'],
     ['wrong content type', 200, 'application/json', '{}'],
-    ['backend error', 200, 'text/event-stream', events({type: 'error', message: 'failed'}, end)],
+    ['backend error', 200, 'text/event-stream', events({type: 'error', message: 'failed', code: 'upstream_5xx', retryable: true}, end)],
     ['missing done', 200, 'text/event-stream', events({type: 'text', delta: 'partial'})],
     ['unsuccessful finish', 200, 'text/event-stream', events({type: 'done', finish_reason: 'length'})],
     ['missing tools', 200, 'text/event-stream', events({type: 'done', finish_reason: 'tool_calls'})],

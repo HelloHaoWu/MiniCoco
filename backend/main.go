@@ -25,6 +25,9 @@ func main() {
 	if err := loadLocalConfig(); err != nil {
 		log.Fatal(err)
 	}
+	if err := configureMockFaults(); err != nil {
+		log.Fatal(err)
+	}
 	host := getenv("MINICOCO_HOST", "127.0.0.1")
 	port := getenv("MINICOCO_PORT", "8017")
 	addr := host + ":" + port

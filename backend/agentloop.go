@@ -16,7 +16,7 @@ func processRequestContext(ctx context.Context, req ChatRequest, emit func(Event
 	messages, tools := genPrompt(req.Messages, req.Workspace)
 	if err := streamCompletionContext(ctx, messages, tools, req.Model, emit); err != nil {
 		// Surface upstream/LLM failures to the client, then still end the round.
-		emit(Event{Type: EvError, Message: err.Error()})
+		emit(failureEvent(err))
 		emit(Event{Type: EvDone, FinishReason: "error"})
 	}
 }

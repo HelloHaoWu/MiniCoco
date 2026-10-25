@@ -22,6 +22,37 @@ func TestLoadEnvPreservesEnvironment(t *testing.T) {
 	}
 }
 
+func TestLoadEnvMockConfiguration(t *testing.T) {
+	for _, key := range []string{"LLM_MOCK_MODE", "LLM_MOCK_FLAKY_FAILS"} {
+		previous, present := os.LookupEnv(key)
+		os.Unsetenv(key)
+		t.Cleanup(func() {
+			if present {
+				os.Setenv(key, previous)
+			} else {
+				os.Unsetenv(key)
+			}
+		})
+	}
+	path := filepath.Join(t.TempDir(), ".env")
+	if err := os.WriteFile(path, []byte("LLM_MOCK_MODE=flaky\nLLM_MOCK_FLAKY_FAILS=2\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if err := loadEnvFile(path); err != nil {
+		t.Fatal(err)
+	}
+	if os.Getenv("LLM_MOCK_MODE") != "flaky" || os.Getenv("LLM_MOCK_FLAKY_FAILS") != "2" {
+		t.Fatal("mock settings were not loaded")
+	}
+	t.Setenv("LLM_MOCK_FLAKY_FAILS", "7")
+	if err := loadEnvFile(path); err != nil {
+		t.Fatal(err)
+	}
+	if os.Getenv("LLM_MOCK_FLAKY_FAILS") != "7" {
+		t.Fatal("local file overrode exported failure budget")
+	}
+}
+
 func TestLoadEnvQuotesAndDoesNotLeakMalformedValues(t *testing.T) {
 	previous, exists := os.LookupEnv("LLM_API_KEY")
 	os.Unsetenv("LLM_API_KEY")

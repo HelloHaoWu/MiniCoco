@@ -41,6 +41,46 @@ LLM_PROVIDER=mock bash run_backend.sh
 
 mock 模型走确定性的两轮循环 (list_dir -> 给结论), 证明闭环跑通, 不需要网络
 
+#### flaky mock：确定性故障注入（Phase 1 Part 1）
+
+```bash
+# 终端 A：该进程前两次模型请求失败，之后恢复正常 mock
+LLM_PROVIDER=mock LLM_MOCK_MODE=flaky LLM_MOCK_FLAKY_FAILS=2 bash run_backend.sh
+
+# 终端 B：独立执行三次，前两次失败，第三次完成 list_dir → 回答闭环
+./run_client.sh "列出当前文件" --workspace .
+./run_client.sh "列出当前文件" --workspace .
+./run_client.sh "列出当前文件" --workspace .
+```
+
+`LLM_MOCK_MODE` 默认 `normal`；`flaky` 下 `LLM_MOCK_FLAKY_FAILS` 默认 2，接受非负整数。
+失败预算在后端启动时初始化、每进程一份，并发时原子消耗；`/health` 不消耗预算，恢复后不会在下一轮重新注入失败。
+非法 mock 配置会在启动时失败，真实模型 provider 忽略这些 mock 设置。这两个参数也可通过本地 `.env` 配置，导出的环境变量优先。
+
+本阶段只增加后端分类与故障源，**客户端仍把错误当作失败返回，不会自动重试**。
+可取消退避和自动重试属于 Phase 1 Part 2，非流式兜底属于 Part 3，当前均未实现。
+
+错误 SSE 事件增加 `code`、`retryable`；`retryable:false` 会显式输出，随后仍发 `done(error)`：
+
+```json
+{"type":"error","message":"LLM HTTP 429: insufficient quota","code":"quota_exhausted","retryable":false}
+{"type":"done","finish_reason":"error"}
+```
+
+| 故障 | code | retryable |
+| --- | --- | --- |
+| 上游 429 限流 | `rate_limited` | true |
+| 上游 429 配额/余额耗尽 | `quota_exhausted` | false |
+| 上游 400 上下文超长 | `need_compression` | true，需先压缩，不能直接重发 |
+| 上游 5xx、408、425，连接错误或缺少流结束标记 | `upstream_5xx` | true |
+| 请求或流读取超时 | `upstream_timeout` | true |
+| 其他请求级 4xx | `bad_request` | false |
+| 缺少密钥、非法端点/provider 等配置错误 | `config` | false |
+| 协议/资源限制错误、未知内部错误、用户取消 | `internal` | false |
+
+分类基于 HTTP 状态、已知配额/上下文错误信号和错误来源；单独出现 `quota` 一词不会把可恢复的请求速率限制判成余额耗尽。
+压缩仅提供反应式错误信号，本阶段没有实现压缩算法；旧客户端可忽略新增字段，其他事件格式不变。
+
 ### 2) 接真实模型 (任意 OpenAI 兼容端点)
 
 ```bash

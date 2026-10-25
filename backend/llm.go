@@ -5,9 +5,11 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"os"
 	"sort"
 	"strings"
@@ -36,7 +38,7 @@ func streamCompletionContext(ctx context.Context, messages []map[string]any, too
 	case "mock":
 		return mockStream(messages, emit)
 	default:
-		return fmt.Errorf("unsupported LLM_PROVIDER; use openai or mock")
+		return completionFailure(codeConfig, false, "unsupported LLM_PROVIDER; use openai or mock", nil)
 	}
 }
 
@@ -75,7 +77,11 @@ func openaiStreamContext(ctx context.Context, messages []map[string]any, tools [
 	}
 	apiKey := os.Getenv("LLM_API_KEY")
 	if apiKey == "" {
-		return fmt.Errorf("LLM_API_KEY is missing; set it in the project .env or environment")
+		return completionFailure(codeConfig, false, "LLM_API_KEY is missing; set it in the project .env or environment", nil)
+	}
+	endpoint, err := url.Parse(base)
+	if err != nil || (endpoint.Scheme != "http" && endpoint.Scheme != "https") || endpoint.Host == "" || endpoint.User != nil || endpoint.RawQuery != "" || endpoint.Fragment != "" {
+		return completionFailure(codeConfig, false, "LLM_BASE_URL must be an HTTP(S) base URL without credentials, query or fragment", nil)
 	}
 	payload := map[string]any{
 		"model": model, "messages": messages, "tools": tools,
@@ -88,11 +94,11 @@ func openaiStreamContext(ctx context.Context, messages []map[string]any, tools [
 	}
 	reqBody, err := json.Marshal(payload)
 	if err != nil {
-		return fmt.Errorf("encode LLM request: %w", err)
+		return completionFailure(codeBadRequest, false, "encode LLM request: "+err.Error(), err)
 	}
 	req, err := http.NewRequestWithContext(ctx, "POST", base+"/chat/completions", bytes.NewReader(reqBody))
 	if err != nil {
-		return err
+		return completionFailure(codeConfig, false, "invalid LLM request configuration", err)
 	}
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Authorization", "Bearer "+apiKey)
@@ -100,14 +106,16 @@ func openaiStreamContext(ctx context.Context, messages []map[string]any, tools [
 	client := &http.Client{Timeout: 120 * time.Second}
 	resp, err := client.Do(req)
 	if err != nil {
-		return err
+		code, retryable := classifyCompletionError(err)
+		return completionFailure(code, retryable, "LLM request failed: "+strings.ReplaceAll(err.Error(), apiKey, "[redacted]"), err)
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		buf := new(bytes.Buffer)
 		buf.ReadFrom(io.LimitReader(resp.Body, 4096))
 		detail := strings.ReplaceAll(strings.TrimSpace(buf.String()), apiKey, "[redacted]")
-		return fmt.Errorf("LLM HTTP %d: %s", resp.StatusCode, detail)
+		code, retryable := classifyUpstream(resp.StatusCode, buf.String())
+		return completionFailure(code, retryable, fmt.Sprintf("LLM HTTP %d: %s", resp.StatusCode, detail), nil)
 	}
 	if !strings.HasPrefix(strings.ToLower(resp.Header.Get("Content-Type")), "text/event-stream") {
 		return fmt.Errorf("LLM did not return an SSE stream")
@@ -197,13 +205,20 @@ func openaiStreamContext(ctx context.Context, messages []map[string]any, tools [
 		}
 	}
 	if err := sc.Err(); err != nil {
-		return err
+		if errors.Is(err, bufio.ErrTooLong) {
+			return fmt.Errorf("LLM SSE frame exceeds 1 MiB")
+		}
+		code, retryable := classifyCompletionError(err)
+		if code == codeInternal && !errors.Is(err, context.Canceled) {
+			code, retryable = codeUpstream5xx, true
+		}
+		return completionFailure(code, retryable, "read LLM stream: "+strings.ReplaceAll(err.Error(), apiKey, "[redacted]"), err)
 	}
 	if limited.N <= 0 {
 		return fmt.Errorf("LLM response exceeds 4 MiB")
 	}
 	if !done || finish == "" {
-		return fmt.Errorf("incomplete LLM stream")
+		return completionFailure(codeUpstream5xx, true, "incomplete LLM stream", nil)
 	}
 	if finish != FinishStop && finish != FinishToolCalls {
 		return fmt.Errorf("LLM stopped unsuccessfully: %s", finish)
@@ -252,6 +267,9 @@ func getenv(k, def string) string {
 // (last message is the user query): narrate, then call list_dir on the
 // workspace root. Turn 2 (last message is a tool result): give a final answer.
 func mockStream(messages []map[string]any, emit func(Event)) error {
+	if consumeMockFailure() {
+		return completionFailure(codeUpstream5xx, true, "mock transient failure (flaky)", nil)
+	}
 	last := map[string]any{}
 	if len(messages) > 0 {
 		last = messages[len(messages)-1]

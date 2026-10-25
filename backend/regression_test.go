@@ -78,6 +78,15 @@ func TestInvalidStreamsNeverEmitExecutableTools(t *testing.T) {
 			if err == nil {
 				t.Fatal("invalid stream accepted")
 			}
+			wantRetryable := test.name == "empty" || test.name == "missing terminal finish" || test.name == "missing DONE"
+			code, retryable := classifyCompletionError(err)
+			wantCode := codeInternal
+			if wantRetryable {
+				wantCode = codeUpstream5xx
+			}
+			if retryable != wantRetryable || code != wantCode {
+				t.Fatalf("incorrect stream classification: %s/%t", code, retryable)
+			}
 			for _, event := range events {
 				if event.Type == EvToolCall || event.Type == EvDone {
 					t.Fatalf("invalid stream emitted %+v", event)
