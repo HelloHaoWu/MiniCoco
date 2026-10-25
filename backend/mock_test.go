@@ -189,7 +189,7 @@ func TestFlakyMockProcessIsolation(t *testing.T) {
 			reservation.Close()
 			command := exec.Command(executable, "-test.run=^TestFlakyBackendChild$")
 			command.Dir = t.TempDir()
-			command.Env = append(os.Environ(), "STORE_BACKEND=file", "MINICOCO_DATA_DIR="+command.Dir+"/data", "MINICOCO_TEST_FLAKY_CHILD=1", "LLM_PROVIDER=mock", "LLM_API_KEY=", "LLM_MOCK_MODE=flaky", "LLM_MOCK_FLAKY_FAILS=2", "MINICOCO_HOST=127.0.0.1", fmt.Sprintf("MINICOCO_PORT=%d", port))
+			command.Env = append(os.Environ(), "MINICOCO_MODEL_IS_FUNCTION_CALL=true", "MINICOCO_DEBUG_PROMPT=0", "STORE_BACKEND=file", "MINICOCO_DATA_DIR="+command.Dir+"/data", "MINICOCO_TEST_FLAKY_CHILD=1", "LLM_PROVIDER=mock", "LLM_API_KEY=", "LLM_MOCK_MODE=flaky", "LLM_MOCK_FLAKY_FAILS=2", "MINICOCO_HOST=127.0.0.1", fmt.Sprintf("MINICOCO_PORT=%d", port))
 			if err := command.Start(); err != nil {
 				t.Fatal(err)
 			}

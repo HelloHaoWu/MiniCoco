@@ -33,6 +33,9 @@ func main() {
 	if _, err := buildTools(ModeFull); err != nil {
 		log.Fatal(err)
 	}
+	if _, err := modelIsFunctionCall(""); err != nil {
+		log.Fatal(err)
+	}
 	var err error
 	var closeStores func()
 	startup, stopStartup := context.WithTimeout(context.Background(), 15*time.Second)

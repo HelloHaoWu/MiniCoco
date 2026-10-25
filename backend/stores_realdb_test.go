@@ -449,6 +449,8 @@ func TestRealRedisCrossProcess(t *testing.T) {
 }
 
 func TestRealWiringAndCLI(t *testing.T) {
+	t.Setenv("MINICOCO_MODEL_IS_FUNCTION_CALL", "true")
+	t.Setenv("MINICOCO_DEBUG_PROMPT", "0")
 	stores := realContractFactory(t)()
 	defer stores.close()
 	transcript := stores.transcript.(*MongoTranscriptStore)
@@ -536,5 +538,42 @@ func TestRealWiringAndCLI(t *testing.T) {
 	after, err := reopened.meta.GetSession(context.Background(), sid)
 	if err != nil || after.TotalTokens != session.TotalTokens || after.MessageCount != session.MessageCount {
 		t.Fatal("realdb replay duplicated usage or messages")
+	}
+}
+
+func TestRealXMLToolResultPersistence(t *testing.T) {
+	open := realContractFactory(t)
+	stores := open()
+	defer func() { stores.close() }()
+	previous := activeSessions
+	activeSessions = &sessionService{meta: stores.meta, transcript: stores.transcript, coord: stores.coord}
+	defer func() { activeSessions = previous }()
+	t.Setenv("MINICOCO_MODEL_IS_FUNCTION_CALL", "false")
+	t.Setenv("MINICOCO_DEBUG_PROMPT", "0")
+	t.Setenv("LLM_PROVIDER", "mock")
+	preserveMockBudget(t)
+	response, events := deltaResponse(t, map[string]any{"roundId": "real-xml-first", "query": "inspect", "workspace": "/tmp", "stream": false})
+	requireRoundFinish(t, response, events, FinishToolCalls)
+	sid := response.Header().Get("X-Session-Id")
+	request := map[string]any{"sessionId": sid, "roundId": "real-xml-results", "workspace": "/tmp", "stream": false,
+		"toolUseResults": []ToolUseResult{{ID: "call_mock_1", Name: "list_dir", Output: "missing <directory>", IsError: true}}}
+	response, original := deltaResponse(t, request)
+	requireRoundFinish(t, response, original, FinishStop)
+	stores.close()
+	stores = open()
+	activeSessions = &sessionService{meta: stores.meta, transcript: stores.transcript, coord: stores.coord}
+	history, err := stores.transcript.Latest(context.Background(), sid, 10)
+	if err != nil || len(history) != 4 || history[2]["role"] != "user" || !strings.Contains(history[2]["content"].(string), "<status>failed</status>") {
+		t.Fatalf("Mongo XML input did not survive reopen: %+v %v", history, err)
+	}
+	_, replay := deltaResponse(t, request)
+	before, _ := json.Marshal(original)
+	after, _ := json.Marshal(replay)
+	if string(before) != string(after) {
+		t.Fatal("real XML round replay changed events")
+	}
+	session, err := stores.meta.GetSession(context.Background(), sid)
+	if err != nil || session.TotalTokens != 4 || session.MessageCount != 4 {
+		t.Fatal("real XML replay duplicated usage/messages")
 	}
 }

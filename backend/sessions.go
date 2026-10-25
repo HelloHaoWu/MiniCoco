@@ -55,18 +55,22 @@ func validateDelta(req ChatRequest) error {
 		if req.SessionID == "" || len(req.ToolUseResults) < 1 || len(req.ToolUseResults) > 16 {
 			return ErrStoreInvalid
 		}
-		seen := map[string]bool{}
-		for _, result := range req.ToolUseResults {
-			output := result.Output
-			if result.IsError && !strings.HasPrefix(output, "ERROR:") {
-				output = "ERROR: " + output
-			}
-			encoded, _ := json.Marshal(output)
-			if result.ID == "" || len(result.ID) > 256 || result.Name == "" || len(result.Name) > 128 || seen[result.ID] || len(encoded) > maxToolOutputBytes {
-				return ErrStoreInvalid
-			}
-			seen[result.ID] = true
+		return validateToolResults(req.ToolUseResults)
+	}
+	return nil
+}
+
+func validateToolResults(results []ToolUseResult) error {
+	if len(results) < 1 || len(results) > 16 {
+		return ErrStoreInvalid
+	}
+	seen := map[string]bool{}
+	for _, result := range results {
+		encoded, _ := json.Marshal(nativeToolOutput(result))
+		if result.ID == "" || len(result.ID) > 256 || result.Name == "" || len(result.Name) > 128 || seen[result.ID] || len(encoded) > maxToolOutputBytes {
+			return ErrStoreInvalid
 		}
+		seen[result.ID] = true
 	}
 	return nil
 }
@@ -124,13 +128,8 @@ func historyBudget(history []Message) error {
 	return nil
 }
 
-func incomingMessages(req ChatRequest, history []Message) ([]Message, error) {
-	var calls []struct {
-		ID       string `json:"id"`
-		Function struct {
-			Name string `json:"name"`
-		} `json:"function"`
-	}
+func incomingMessages(req ChatRequest, history []Message, formatter Formatter) ([]Message, error) {
+	var calls []pendingToolCall
 	if len(history) > 0 {
 		last := history[len(history)-1]
 		if last["role"] == "assistant" && last["tool_calls"] != nil {
@@ -146,26 +145,7 @@ func incomingMessages(req ChatRequest, history []Message) ([]Message, error) {
 		}
 		return []Message{{"role": "user", "content": *req.Query}}, nil
 	}
-	if len(calls) != len(req.ToolUseResults) {
-		return nil, fmt.Errorf("tool results must cover the complete pending batch")
-	}
-	byID := map[string]ToolUseResult{}
-	for _, result := range req.ToolUseResults {
-		byID[result.ID] = result
-	}
-	input := []Message{}
-	for _, call := range calls {
-		result, exists := byID[call.ID]
-		if !exists || result.Name != call.Function.Name {
-			return nil, fmt.Errorf("tool result identity does not match pending batch")
-		}
-		output := result.Output
-		if result.IsError && !strings.HasPrefix(output, "ERROR:") {
-			output = "ERROR: " + output
-		}
-		input = append(input, Message{"role": "tool", "tool_call_id": call.ID, "content": output})
-	}
-	return input, nil
+	return genToolResults(req.ToolUseResults, calls, formatter)
 }
 
 // The Phase 5 seam is intentionally empty; it does not drop any history.
@@ -175,6 +155,14 @@ func (service *sessionService) process(ctx context.Context, req ChatRequest, emi
 	mode, err := normalizeMode(req.Mode)
 	if err != nil {
 		return completionFailure(codeBadRequest, false, err.Error(), err)
+	}
+	isFunctionCall, err := modelIsFunctionCall(req.Model)
+	if err != nil {
+		return err
+	}
+	formatIdentity := ""
+	if !isFunctionCall {
+		formatIdentity = "xml-v1"
 	}
 	// Empty/full retains pre-Phase-3 fingerprints, including successful replays.
 	identityMode := mode
@@ -188,8 +176,9 @@ func (service *sessionService) process(ctx context.Context, req ChatRequest, emi
 		Query            *string
 		Results          []ToolUseResult
 		Workspace, Model string
-		Mode             Mode `json:",omitempty"`
-	}{req.Query, req.ToolUseResults, req.Workspace, req.Model, identityMode})
+		Mode             Mode   `json:",omitempty"`
+		ToolFormat       string `json:",omitempty"`
+	}{req.Query, req.ToolUseResults, req.Workspace, req.Model, identityMode, formatIdentity})
 	hash := sha256.Sum256(encoded)
 	fingerprint := hex.EncodeToString(hash[:])
 	round, roundErr := service.transcript.Round(ctx, req.SessionID, req.RoundID)
@@ -217,7 +206,14 @@ func (service *sessionService) process(ctx context.Context, req ChatRequest, emi
 	if roundErr == nil && round.BaseCount != len(history) {
 		return completionFailure(codeBadRequest, false, "unfinished round is stale; use a new roundId", ErrStoreConflict)
 	}
-	input, err := incomingMessages(req, history)
+	wantFormat := "native"
+	if !isFunctionCall {
+		wantFormat = "xml"
+	}
+	if previous := historyToolFormat(history); previous != "" && previous != wantFormat {
+		return completionFailure(codeBadRequest, false, "session tool result format differs; restore its capability setting or start a new session", nil)
+	}
+	input, err := incomingMessages(req, history, pickFormatter(isFunctionCall))
 	if err != nil {
 		return completionFailure(codeBadRequest, false, err.Error(), err)
 	}
@@ -284,11 +280,11 @@ func (service *sessionService) process(ctx context.Context, req ChatRequest, emi
 	next := append(current, reply)
 	// Reserve the next full tool-result batch before exposing executable calls.
 	reserved := append([]Message{}, next...)
-	for _, event := range buffer.events {
-		if event.Type == EvToolCall {
-			reserved = append(reserved, Message{"role": "tool", "tool_call_id": event.ID, "content": strings.Repeat(" ", maxToolOutputBytes)})
-		}
+	resultReserve, err := reservedToolResults(buffer.events, isFunctionCall)
+	if err != nil {
+		return err
 	}
+	reserved = append(reserved, resultReserve...)
 	if err := historyBudget(reserved); err != nil {
 		return completionFailure(codeBadRequest, false, err.Error(), err)
 	}

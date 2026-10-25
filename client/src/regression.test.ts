@@ -211,7 +211,7 @@ test('Go proxy and real CLI complete read → edit → command → final respons
     }, async upstream => {
         const reservation = http.createServer(); reservation.listen(0, '127.0.0.1'); await once(reservation, 'listening');
         const port = (reservation.address() as import('node:net').AddressInfo).port; await new Promise<void>(resolve => reservation.close(() => resolve()));
-        const child = spawn(binary, [], {cwd: temp, env: {...process.env, STORE_BACKEND: 'file', MINICOCO_DATA_DIR: path.join(temp, 'data'), LLM_PROVIDER: 'openai', LLM_BASE_URL: upstream, LLM_API_KEY: 'fake-test-key', LLM_MODEL: 'test-model', MINICOCO_HOST: '127.0.0.1', MINICOCO_PORT: String(port)}, stdio: 'ignore'});
+        const child = spawn(binary, [], {cwd: temp, env: {...process.env, STORE_BACKEND: 'file', MINICOCO_MODEL_IS_FUNCTION_CALL: 'true', MINICOCO_DEBUG_PROMPT: '0', MINICOCO_DATA_DIR: path.join(temp, 'data'), LLM_PROVIDER: 'openai', LLM_BASE_URL: upstream, LLM_API_KEY: 'fake-test-key', LLM_MODEL: 'test-model', MINICOCO_HOST: '127.0.0.1', MINICOCO_PORT: String(port)}, stdio: 'ignore'});
         const exit = once(child, 'exit');
         try {
             let ready = false;
@@ -235,7 +235,7 @@ test('Go flaky backend and real CLI recover with default cancellable backoff', {
     assert.equal(build.status, 0, build.stderr);
     const reservation = http.createServer();reservation.listen(0, '127.0.0.1');await once(reservation, 'listening');
     const port = (reservation.address() as import('node:net').AddressInfo).port;await new Promise<void>(resolve => reservation.close(() => resolve()));
-    const child = spawn(binary, [], {cwd: temp, env: {...process.env, STORE_BACKEND: 'file', MINICOCO_DATA_DIR: path.join(temp, 'data'), LLM_PROVIDER: 'mock', LLM_API_KEY: '', LLM_MOCK_MODE: 'flaky', LLM_MOCK_FLAKY_FAILS: '2', MINICOCO_HOST: '127.0.0.1', MINICOCO_PORT: String(port)}, stdio: 'ignore'});
+    const child = spawn(binary, [], {cwd: temp, env: {...process.env, STORE_BACKEND: 'file', MINICOCO_MODEL_IS_FUNCTION_CALL: 'true', MINICOCO_DEBUG_PROMPT: '0', MINICOCO_DATA_DIR: path.join(temp, 'data'), LLM_PROVIDER: 'mock', LLM_API_KEY: '', LLM_MOCK_MODE: 'flaky', LLM_MOCK_FLAKY_FAILS: '2', MINICOCO_HOST: '127.0.0.1', MINICOCO_PORT: String(port)}, stdio: 'ignore'});
     const exit = once(child, 'exit');
     try {
         let ready = false;
@@ -257,7 +257,7 @@ test('Go flaky backend recovers through one real JSON fallback and executes a to
     assert.equal(build.status, 0, build.stderr);
     const reservation = http.createServer();reservation.listen(0, '127.0.0.1');await once(reservation, 'listening');
     const port = (reservation.address() as import('node:net').AddressInfo).port;await new Promise<void>(resolve => reservation.close(() => resolve()));
-    const child = spawn(binary, [], {cwd: temp, env: {...process.env, STORE_BACKEND: 'file', MINICOCO_DATA_DIR: path.join(temp, 'data'), LLM_PROVIDER: 'mock', LLM_API_KEY: '', LLM_MOCK_MODE: 'flaky', LLM_MOCK_FLAKY_FAILS: '2', MINICOCO_HOST: '127.0.0.1', MINICOCO_PORT: String(port)}, stdio: 'ignore'});
+    const child = spawn(binary, [], {cwd: temp, env: {...process.env, STORE_BACKEND: 'file', MINICOCO_MODEL_IS_FUNCTION_CALL: 'true', MINICOCO_DEBUG_PROMPT: '0', MINICOCO_DATA_DIR: path.join(temp, 'data'), LLM_PROVIDER: 'mock', LLM_API_KEY: '', LLM_MOCK_MODE: 'flaky', LLM_MOCK_FLAKY_FAILS: '2', MINICOCO_HOST: '127.0.0.1', MINICOCO_PORT: String(port)}, stdio: 'ignore'});
     const exit = once(child, 'exit');let fallbacks = 0;
     try {
         let ready = false;

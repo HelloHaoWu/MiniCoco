@@ -304,7 +304,9 @@ func mockStream(messages []map[string]any, emit func(Event)) error {
 	if len(messages) > 0 {
 		last = messages[len(messages)-1]
 	}
-	if last["role"] == "tool" {
+	text, _ := last["content"].(string)
+	xmlResult := last["role"] == "user" && strings.HasPrefix(text, "<tool_result>") && len(messages) >= 2 && messages[len(messages)-2]["role"] == "assistant" && messages[len(messages)-2]["tool_calls"] != nil
+	if last["role"] == "tool" || xmlResult {
 		for _, ch := range "Done. I inspected the workspace and listed its contents above." {
 			emit(Event{Type: EvText, Delta: string(ch)})
 		}

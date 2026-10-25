@@ -46,6 +46,8 @@ export interface Message {
     tool_call_id?: string;
 }
 
+// Complete batch in execution/request order; the backend validates identities
+// before selecting Native/XML presentation. Formatting never re-executes tools.
 export interface ToolUseResult { id: string; name: string; output: string; isError: boolean; }
 export type ToolMode = 'full' | 'readonly' | 'safe';
 export interface RoundRequest {

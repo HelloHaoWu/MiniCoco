@@ -61,6 +61,27 @@ mock 模型走确定性的两轮循环 (list_dir -> 给结论), 证明闭环跑�
 
 工具资源现为 `backend/tools/<name>__vN.json`，`function.name` 保持原名；增加的 `availableVersion` 表示最低 Harness 协议版本，当前内部版本为 1，尚未开放客户端选择。加载器为每个工具选择**兼容版本中数值最大的 N**，再按 read/list/grep/write/edit/run_command 固定顺序输出。availableVersion 仅用于本地选择，不发给模型接口；默认 full 的六个函数定义与改造前一致。
 
+#### 工具结果回填与调试（Phase 3 Part 2）
+
+客户端继续提交 `toolUseResults: [{id,name,output,isError}]`。后端先校验结果完整匹配上一批调用，再按**请求顺序**格式化、持久化并加入 prompt；不按 ID 字典序排序。旧实现按调用顺序回填，现按文档统一为请求顺序，CLI 正常发送顺序保持不变。
+
+- 默认 `MINICOCO_MODEL_IS_FUNCTION_CALL=true`：NativeFormatter，每个结果一条 `role:tool` 消息，保留 tool_call_id、原始输出及既有 ERROR 前缀语义。
+- `MINICOCO_MODEL_IS_FUNCTION_CALL=false`：XmlFormatter，整批结果合成一条 `role:user` 消息，每项为 `<tool_result><status>succeeded|failed</status><id>调用ID</id><工具名>输出</工具名></tool_result>`。状态由 isError 决定；输出与 ID 转义，非法 XML 字符替换为 U+FFFD，工具名仅允许已注册名称。
+- 能力开关当前作用于整个后端，严格接受 true/false，默认 true；Phase 4 将用模型路由能力字段替代。**本 Part 实现结果呈现，未增加 XML 工具调用生成/解析**，上游仍使用现有 function-call 请求与响应管线。
+
+```bash
+# 用 mock 验证 XML 回填；建议使用独立数据目录
+MINICOCO_MODEL_IS_FUNCTION_CALL=false LLM_PROVIDER=mock \
+MINICOCO_DATA_DIR=/absolute/path/to/xml-demo bash run_backend.sh
+
+# 显式开启完整 messages 调试输出（stderr，含工作区和会话内容）
+MINICOCO_DEBUG_PROMPT=1 LLM_PROVIDER=mock bash run_backend.sh
+```
+
+两个开关也可通过本地 .env 配置，已导出环境变量优先。调试默认关闭，不输出 HTTP 认证头或配置中的 API Key，但 messages 本身可能含私密代码与用户文本，调试日志应留在本地。
+
+格式化后的输入是持久化历史的一部分。XML 格式加入轮次指纹，默认 Native 保留旧指纹；同轮不能切换格式。会话已有工具结果后，切换能力开关会拒绝继续，需恢复原配置或新建会话，不自动转换旧历史。XML 会增加体积，工具批次暴露前按最坏转义后的 Go JSON 大小预留预算，超限提前失败；每项原始结果仍受 64 KiB 限制。
+
 #### flaky mock：确定性故障注入（Phase 1 Part 1）
 
 ```bash
@@ -260,6 +281,7 @@ MiniCoco/
 │   ├── session_http.go           #   会话列表和恢复元数据
 │   ├── prompt.go                 #   genPrompt：系统提示词 + 工具清单（//go:embed 资源）
 │   ├── tools.go                  #   工具注册、Schema 版本选择、稳定顺序和模式过滤
+│   ├── toolresult.go             #   Native/XML 结果、身份匹配、顺序与格式预算
 │   ├── llm.go                    #   provider 选择 + 流式 + tool_call 解析（openai / mock）
 │   ├── protocol.go               #   SSE 事件类型 / 请求体
 │   ├── store.go / store_files.go #   三存储接口、数据类型和原子文件写入
@@ -298,7 +320,7 @@ MiniCoco/
 
 - **历史放后端**：服务端从持久化 transcript 读取历史，客户端只提交增量；三个接口分离元数据、正文与协调。默认 JSON/JSONL/进程内实现便于离线运行，可选 SQLite/MongoDB/Redis 档保留同样的轮次和去重语义。
 - **原生 function calling**：直接用模型的 `tools` / `tool_calls`。真实前后端设计 还支持 XML 风格工具协议、prompt cache、ABTest 分流等。
-- **逐步完善实现**：已实现模型请求重试、一次性 JSON 兜底、会话持久化/恢复、可选真实库档和工具版本/模式控制；尚未实现 XML 工具结果 formatter、自动模型路由、上下文压缩算法、tracing、权限审批、memory、subagent / MCP。使用明确的预算和失败状态控制基本边界。
+- **逐步完善实现**：已实现模型请求重试、一次性 JSON 兜底、会话持久化/恢复、可选真实库档、工具版本/模式和 Native/XML 结果回填；尚未实现 XML 工具调用解析、自动模型路由、上下文压缩算法、tracing、权限审批、memory、subagent / MCP。使用明确的预算和失败状态控制基本边界。
 - **工具集**：保留 6 个核心工具。新增工具时提供带版本/元数据的 JSON，更新后端 ToolName、固定顺序与模式策略，并在客户端增加 Handler、注册表和模式策略，补齐两端回归；仅放一个 JSON 不会自动开放执行。
 - **语言**：真实后端是 Java；这里用 Go 保持「编译型、单二进制、无框架」的最小形态，前端沿用 TypeScript。
 

@@ -36,7 +36,7 @@ async function backend(binary: string, temp: string, upstream: string): Promise<
     const reservation = http.createServer();reservation.listen(0, '127.0.0.1');await once(reservation, 'listening');
     const port = (reservation.address() as import('node:net').AddressInfo).port;
     await new Promise<void>(resolve => reservation.close(() => resolve()));
-    const child = spawn(binary, [], {cwd: temp, env: {...process.env, STORE_BACKEND: 'file', MINICOCO_DATA_DIR: path.join(temp, 'data'), MINICOCO_HOST: '127.0.0.1', MINICOCO_PORT: String(port),
+    const child = spawn(binary, [], {cwd: temp, env: {...process.env, STORE_BACKEND: 'file', MINICOCO_MODEL_IS_FUNCTION_CALL: 'true', MINICOCO_DEBUG_PROMPT: '0', MINICOCO_DATA_DIR: path.join(temp, 'data'), MINICOCO_HOST: '127.0.0.1', MINICOCO_PORT: String(port),
         LLM_PROVIDER: 'openai', LLM_BASE_URL: upstream, LLM_MODEL: 'test-model', LLM_API_KEY: 'fake-test-key'}, stdio: 'ignore'});
     const exit = once(child, 'exit');
     const stop = async (): Promise<void> => {if (child.exitCode === null) child.kill('SIGTERM');await exit;};
