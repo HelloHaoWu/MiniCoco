@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -14,6 +15,9 @@ import (
 )
 
 func requestEvents(t *testing.T, body string, buffered bool) []Event {
+	if activeSessions == nil {
+		sessionFixture(t)
+	}
 	t.Helper()
 	response := httptest.NewRecorder()
 	handleChatStream(response, httptest.NewRequest("POST", "/chat/stream", strings.NewReader(body)))
@@ -45,7 +49,11 @@ func TestBufferedAndStreamingEventsAreEquivalent(t *testing.T) {
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			t.Setenv("LLM_PROVIDER", test.provider)
-			base := `{"messages":[{"role":"` + test.role + `","content":"test"}]`
+			base := `{"roundId":"equivalent","query":"test"`
+			if test.role == "tool" {
+				requestEvents(t, base+`}`, false)
+				base = fmt.Sprintf(`{"sessionId":%q,"roundId":"tools","toolUseResults":[{"id":"call_mock_1","name":"list_dir","output":"test","isError":false}]`, initialSessionID("equivalent"))
+			}
 			missing := requestEvents(t, base+`}`, false)
 			explicit := requestEvents(t, base+`,"stream":true}`, false)
 			buffered := requestEvents(t, base+`,"stream":false}`, true)
@@ -55,7 +63,7 @@ func TestBufferedAndStreamingEventsAreEquivalent(t *testing.T) {
 		})
 	}
 	response := httptest.NewRecorder()
-	handleChatStream(response, httptest.NewRequest("POST", "/chat/stream", strings.NewReader(`{"messages":[{"role":"user","content":"test"}],"stream":"false"}`)))
+	handleChatStream(response, httptest.NewRequest("POST", "/chat/stream", strings.NewReader(`{"roundId":"bad-stream","query":"test","stream":"false"}`)))
 	if response.Code != 400 {
 		t.Fatal("non-boolean stream flag accepted")
 	}
@@ -74,7 +82,11 @@ func TestBufferedFlakyUsesSameProcessBudget(t *testing.T) {
 		if attempt == 3 {
 			role = "tool"
 		}
-		body, _ := json.Marshal(map[string]any{"messages": []any{map[string]string{"role": role, "content": "test"}}, "stream": !buffered})
+		request := map[string]any{"roundId": "transport-first", "query": "test", "stream": !buffered}
+		if role == "tool" {
+			request = map[string]any{"sessionId": initialSessionID("transport-first"), "roundId": "transport-tools", "toolUseResults": []ToolUseResult{{ID: "call_mock_1", Name: "list_dir", Output: "test"}}, "stream": !buffered}
+		}
+		body, _ := json.Marshal(request)
 		assertMockRound(t, requestEvents(t, string(body), buffered), attempt)
 	}
 }
@@ -110,13 +122,14 @@ func TestBufferedResponseReusesStreamingProvider(t *testing.T) {
 		body := sse(map[string]any{"choices": []any{map[string]any{"delta": map[string]string{"content": "OK"}, "finish_reason": "stop"}}}) + "data: [DONE]\n\n"
 		return &http.Response{StatusCode: 200, Header: http.Header{"Content-Type": {"text/event-stream"}}, Body: io.NopCloser(strings.NewReader(body)), Request: r}, nil
 	})
-	events := requestEvents(t, `{"messages":[{"role":"user","content":"test"}],"stream":false}`, true)
+	events := requestEvents(t, `{"roundId":"buffered","query":"test","stream":false}`, true)
 	if !called || len(events) != 2 || events[0].Delta != "OK" || events[1].FinishReason != FinishStop {
 		t.Fatal("buffered model response failed")
 	}
 }
 
 func TestBufferedClientCancellationReachesUpstream(t *testing.T) {
+	sessionFixture(t)
 	t.Setenv("LLM_PROVIDER", "openai")
 	t.Setenv("LLM_API_KEY", "fake-key")
 	started := make(chan struct{})
@@ -139,7 +152,7 @@ func TestBufferedClientCancellationReachesUpstream(t *testing.T) {
 	defer backend.Close()
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-	request, _ := http.NewRequestWithContext(ctx, "POST", backend.URL, bytes.NewBufferString(`{"messages":[{"role":"user","content":"test"}],"stream":false}`))
+	request, _ := http.NewRequestWithContext(ctx, "POST", backend.URL, bytes.NewBufferString(`{"roundId":"buffered","query":"test","stream":false}`))
 	completed := make(chan error, 1)
 	go func() {
 		response, err := http.DefaultClient.Do(request)

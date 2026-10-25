@@ -23,7 +23,7 @@ export interface Event {
     finish_reason?: string;
     message?: string;
     code?: 'upstream_5xx' | 'upstream_429' | 'rate_limited' | 'quota_exhausted' |
-        'need_compression' | 'bad_request' | 'upstream_timeout' | 'config' | 'internal';
+        'need_compression' | 'bad_request' | 'upstream_timeout' | 'config' | 'internal' | 'storage';
     // Optional for older servers; absent metadata is conservatively fatal.
     retryable?: boolean;
 }
@@ -34,7 +34,7 @@ export interface ToolCall {
     arguments: Record<string, unknown>;
 }
 
-// OpenAI-shaped message the client maintains and replays each round.
+// OpenAI-shaped assistant result; full conversation history lives on the server.
 export interface Message {
     role: string;
     content?: string | null;
@@ -44,5 +44,20 @@ export interface Message {
         function: {name: string; arguments: string};
     }>;
     tool_call_id?: string;
+}
+
+export interface ToolUseResult { id: string; name: string; output: string; isError: boolean; }
+export interface RoundRequest {
+    sessionId: string;
+    roundId: string;
+    query?: string;
+    toolUseResults?: ToolUseResult[];
+    workspace: string;
+    model: string;
+}
+export interface Session {
+    id: string; user: string; model: string; workspace: string; created_at: number;
+    ended: boolean; prompt_tokens: number; completion_tokens: number; total_tokens: number;
+    message_count: number; last_message_count: number;
 }
 

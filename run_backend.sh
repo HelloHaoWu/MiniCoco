@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Start the MiniCoco backend (Go): stateless prompt builder + LLM stream proxy.
+# Start the MiniCoco backend (Go): durable sessions + single-round model proxy.
 #
 # Default: DeepSeek Flash, with settings loaded from the project .env.
 # Offline demo (no API key):

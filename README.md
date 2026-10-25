@@ -2,15 +2,15 @@
 
 一个**可运行**的最小 coding agent，使用双端架构，以方便后端做独立服务扩展（"号池灵活路由"等功能）；
 
-- **backend/**（Go）= 每轮无状态的「Prompt 组装 + LLM 流式代理」。它**不碰文件、不执行命令**，只负责：收到信息 -> 拼系统提示词 + 工具清单 -> 调模型 -> 默认通过 SSE 返回文本/`tool_call`，也支持一次性 JSON 返回同一事件序列。
-- **client/**（TypeScript）= 拥有 **Agent 主循环**，并在**本地执行工具**（读写文件、跑命令、检索）。它发请求 -> 消费SSE -> 执行`tool_call` -> 带着结果再发下一轮，直到模型不再需要工具。
+- **backend/**（Go）= 会话与历史的持有者。接收每轮增量，保存元数据和 transcript，预占模型回复、组装提示词并调用模型；成功落盘后才返回完整工具批次和成功结束事件。默认 SSE，也支持一次性 JSON 返回同一事件序列。后端写自己的会话数据目录，不执行工作区工具。
+- **client/**（TypeScript）= 驱动 **Agent 工具循环**，在本地读写工作区、执行命令和搜索。仅保存 sessionId 与尚未确认的一轮增量，不持有全量历史；发送 query 或 toolUseResults，消费 SSE/JSON，执行完整工具批次，直到模型完成。
 
-这正是该产品的核心设计的最小化落地：**循环在前端，后端是无状态的每轮代理**。前后端通过 HTTP 请求和 SSE/JSON 返回通信，运行时各自零第三方依赖（后端仅 Go 标准库，前端仅 Node 内置模块）。
+当前架构是**工具循环在客户端，会话主权与持久化在后端**。前后端通过 HTTP 请求和 SSE/JSON 返回通信，运行时各自零第三方依赖（后端仅 Go 标准库，前端仅 Node 内置模块）。
 
 ```
-用户提问 -(client/TS)-> POST /chat/stream -(backend/Go)-> 拼 prompt+tools -> 调LLM
+用户提问 -(client/TS)-> sessionId + roundId + query -> 后端存储/预占 -> 拼 prompt+tools -> 调LLM
         ———————————— SSE: text / tool_call ————————————
-(client) 本地执行 tool_call -> 收集结果 -> 带结果再 POST (下一轮)
+(client) 本地执行 tool_call -> 收集 toolUseResults -> 固定下一轮 roundId 再 POST
         -> 循环, 直到某轮没有 tool_call (finish=stop) 结束
 ```
 
@@ -25,7 +25,7 @@
 
 默认模型为 **DeepSeek Flash**（`deepseek-flash`）。后端启动时自动读取项目根目录 `.env`，
 也支持在 `backend/` 下放 `.env`（优先读取）；已有环境变量优先于文件配置。
-本机已配置密钥，直接运行 `bash run_backend.sh` 即可使用默认模型。
+配置完成后，运行 `bash run_backend.sh` 使用默认模型；实际可用性由供应商和账号决定。
 新环境可复制 `.env.example` 为 `.env`，再填写自己的 `LLM_API_KEY`。
 `.env` 已加入 `.gitignore`，不要将真实密钥写进源码或提交到仓库。
 
@@ -56,19 +56,16 @@ LLM_PROVIDER=mock LLM_MOCK_MODE=flaky LLM_MOCK_FLAKY_FAILS=2 bash run_backend.sh
 非法 mock 配置会在启动时失败，真实模型 provider 忽略这些 mock 设置。这两个参数也可通过本地 `.env` 配置，导出的环境变量优先。
 
 客户端已支持类型化错误和可取消的自动重试：只有瞬时故障进入退避，fatal、用户取消和已成功轮不重试。
-对瞬时故障，默认首次请求之外最多重试 7 次（8 次流式尝试，压缩触发的重发另计），基础退避依次为 3/6/12/24/30/30/30 秒，并增加 0—25% 正向抖动。每次请求单独计算 125 秒超时；它不是整轮重试的总超时。
-每次重试都会标记丢弃失败尝试；已显示的部分文本可能仍留在终端，但失败尝试的 assistant/tool 批次不会进入会话历史，工具执行不会重试。
-仅瞬时故障重试耗尽后，再发**恰好一次非流式兜底**，失败即结束；fatal、用户取消和压缩失败不触发兜底。默认是 8 次流式尝试 + 最多 1 次 JSON 请求（压缩重发另计），尝试次数包含兜底。
+对瞬时故障，默认首次请求之外最多重试 7 次（8 次流式尝试），基础退避依次为 3/6/12/24/30/30/30 秒，并增加 0—25% 正向抖动。每次请求单独计算 125 秒超时；它不是整轮重试的总超时。
+每次重试都会标记丢弃失败尝试；已显示的部分文本可能仍留在终端，但失败尝试保留 pending 供同 roundId 重试，但不进入已提交历史，工具执行不会重试。
+仅瞬时故障重试耗尽后，再发**恰好一次非流式兜底**，失败即结束；fatal、用户取消和压缩失败不触发兜底。默认是 8 次流式尝试 + 最多 1 次 JSON 请求，尝试次数包含兜底。
 
 同一 `POST /chat/stream` 的 `stream` 字段省略或为 true 时返回 SSE，为 false 时返回 `application/json` 的 `{events:[...]}`。
 两种返回共用单轮编排、错误分类、完整工具批次验证和客户端 `consumeEvents`，取消贯穿请求与读取。
 **本兜底改变客户端到后端的返回方式，上游模型仍复用原有流式管线**，用于下游传输恢复，不承诺修复所有上游流式故障。
 JSON 返回同样限制为 4 MiB，单事件不超过 1 MiB，完整验证通过后才执行工具。
 
-压缩接缝通过 `CompressionHook` 注入，默认实现明确报 `cannot_compress`，不提供压缩算法。
-钩子操作历史副本，必须减小序列化字节数、保留当前输入及完整工具批次；这允许摘要后消息条数不变。
-只有该轮成功并通过预算检查后才采纳新历史；压缩最多 3 次，不占瞬时故障重试次数，钩子等待也支持取消。
-新用户输入同样先暂存，失败轮不会把它或不完整模型输出提交到历史；已经执行过的前序工具批次保留真实记录。
+历史预算和预占/提交边界已迁到后端；客户端不再压缩或上传历史。后端保留 Phase 5 的 `compressSeam` 空接缝，当前不提供压缩算法。遇到 `need_compression` 明确以 `cannot_compress` 结束，不盲目重发或触发兜底；后续应在持有历史的后端实现压缩。
 
 错误 SSE 事件增加 `code`、`retryable`；`retryable:false` 会显式输出，随后仍发 `done(error)`：
 
@@ -136,20 +133,43 @@ bash check.sh
 回归测试使用临时工作区、假密钥和本机模拟模型，包含真实 Go 后端与 CLI 的
 “读文件 → 编辑 → 执行测试 → 最终回答”四轮流程，不调用付费模型。
 
-#### Phase 2 Part 1：独立存储层
+#### Phase 2：增量会话、持久化与恢复
 
-已提供 `MetaStore`、`TranscriptStore`、`Coordinator` 三接口和默认零第三方依赖实现，**本 Part 尚未接入 HTTP/Agent 循环**。当前 CLI 仍持有内存历史、回传全量 `messages`；运行后端不会自动创建会话文件，尚无 `--resume` 或 `--list`，这些属于 Part 2。
+后端启动时创建文件存储，默认目录相对进程 cwd 为 data/；run_backend.sh 在 backend/ 启动，所以默认是 backend/data/。可在环境或本地 .env 设置 MINICOCO_DATA_DIR 为绝对路径。该目录包含 meta.json 和 transcripts/<sid>.jsonl，两种默认 data/ 路径均已被 Git 忽略。一个目录只允许一个后端写入实例；当前没有跨进程锁、真实数据库或多实例协调，部署时须使用可持久化目录，不能继续按完全无状态服务部署。
 
-- `NewJSONMetaStore("data")`：在首次修改时原子写入 `data/meta.json`，保存会话元数据、token 累加、压缩检查点和消息点赞。`ListSessions` 只返回指定 user 的记录，空 user 也只匹配空 user，按创建时间倒序、同时间按 ID 排序。
-- `NewJSONLTranscriptStore("data")`：保存 `data/transcripts/<sid>.jsonl`；同一 `roundID` 的整批追加可在重启后去重。预占生成 pending，回写追加同一消息 ID 的 final；重复提交相同 final 不追加，不同 final 报冲突。`Latest` 按首次出现位置恢复顺序、用 final 覆盖 pending，并排除未完成占位及存储元数据；`n=0` 返回空、负数报错。摘要单独写 `<sid>.summary.jsonl`，尚不自动压缩或合并进历史。
-- `NewInprocCoordinator(flags)`：提供非阻塞 TTL 锁、按 key 的固定窗口限流、开关及单机广播空实现。显式 flags 优先于同名环境变量；锁过期后旧 owner 的 unlock 不会释放新 owner 的锁。TTL 是租约，过期不会取消正在运行的代码；限流有固定窗口边界行为。
+每轮 POST /chat/stream 只接收以下增量，query 与 toolUseResults 必须二选一；旧 messages 请求被拒绝，客户端与后端需要一起升级：
 
-文件存储面向可信本地目录，每个数据目录只允许一个写入实例；单实例内并发安全，**没有跨进程锁或跨文件事务**。JSONL 保留逻辑追加记录，实际通过重写完整文件并原子替换提交整批变更，适合当前小规模默认档；多实例协调及真实数据库档尚未实现。会话 ID 在拼接路径前校验，消息 ID 包含会话标识，使重启后仍可定位回写文件。`data/` 和 `backend/data/` 已被 Git 忽略，避免提交本地会话内容。
+```json
+{"sessionId":"","roundId":"new-r-<random-uuid>","query":"检查工作区","workspace":"/absolute/workspace","model":"","stream":true}
+```
 
-只验证本 Part（在 `backend/` 执行）：
+- 首轮 sessionId 为空，后端从固定 roundId 派生会话 ID；每次已解析会话的响应都带 X-Session-Id。即使首轮响应头完全丢失，重复同 roundId 也只创建同一会话。CLI 在 stderr 输出 [session] <sid> 供保存。
+- 同轮 roundId 和输入固定；新用户输入或工具结果轮使用新 UUID，避免 REPL、恢复进程的轮号碰撞。切换 SSE/JSON 或从响应头补全 sessionId 不改变轮次身份。同 roundId 更换输入会失败。
+- 工具轮发送 toolUseResults: [{id,name,output,isError}]，必须完整匹配上一批工具的 ID 和名称，输出按后端 Go JSON 编码（包括 HTML/Unicode 分隔符转义）每项不超过 64 KiB，客户端工具也按同一口径截断。工作区绑定会话，不允许静默换目录。
+- 一次原子替换写入输入与 pending，成功后追加相同消息 ID 的 final，并记录成功事件序列和 usage。Latest 不暴露失败轮输入/pending；重试复用预占，成功轮重复请求直接回放事件，不调用模型、不增加正文或用量。同会话并发请求返回 425，客户端按瞬时故障退避。
+- token 来自供应商返回的 usage；未返回时为 0，不做估算。mock 每个成功轮使用合成的 1 prompt / 1 completion / 2 total 计数，仅供测试。元数据按 roundId 去重，并在请求/列表读取时从已提交 transcript 修复中断的回写；这些是成功轮统计，不代表供应商全部计费（失败请求也可能收费）。
+- JSONL 逻辑追加通过整文件原子替换提交，适合当前小规模默认档；无跨文件事务，使用 transcript final 与元数据 round 账本进行恢复。协调器提供进程内 TTL 租约、固定窗口限流、显式 flags 优先于同名环境变量和单机广播空实现。摘要只写入独立 summary.jsonl，尚不合并或压缩。
+
+自测与续会话：
 
 ```bash
-go test -race -run 'Test(JSON|Inproc)' -v ./...
+# 终端 A：数据保留在同一绝对路径，可停止后再次启动
+MINICOCO_DATA_DIR=/absolute/path/to/minicoco-data LLM_PROVIDER=mock bash run_backend.sh
+
+# 终端 B：完成两轮 mock；保存 stderr 中的 [session] s_...
+./run_client.sh "列出工作区文件" --workspace /absolute/workspace
+./run_client.sh --list
+./run_client.sh --resume s_REPLACE_WITH_REAL_ID "再列一次"
+```
+
+--list 使用 GET /sessions，列出本地匿名用户的会话、消息数和成功轮 token。--resume 通过 GET /sessions/<sid> 获取元数据，默认使用保存的 workspace/model，新的 query 由后端加载完整已提交历史；显式 --workspace 不匹配则拒绝。此处没有用户鉴权或多租户隔离。
+
+恢复边界：同一进程会保留未确认的 roundId 和已执行工具结果，失败后重复相同 query 可继续提交，工具不会再执行。进程退出会丢失这份临时结果；如果服务端仍有未完成工具批次，--resume 会拒绝自动重放，因为无法判断副作用是否已发生。max-rounds 耗尽、工具取消后也可能留下该状态。当前不提供跨进程工具执行日志或副作用回滚；可新建会话并人工核对工作区。
+
+存储/会话专项测试（在 backend/）：
+
+```bash
+go test -race -run 'Test(JSON|Inproc|Session)' -v ./...
 go list -m all  # 默认仅 minicoco，无第三方模块
 ```
 
@@ -158,7 +178,7 @@ go list -m all  # 默认仅 minicoco，无第三方模块
 - `Conversation.run()` 返回 `{status, text, rounds, message?}`，状态包括 `completed`、`failed`、`exhausted`、`cancelled`。CLI 仅为正常完成打印答案，失败或耗尽返回退出码 1，取消返回 130。
 - `--max-rounds` 为 1—100 的整数，默认 25；最后一轮若仍要求工具则停止，不再执行该批工具。
 - 运行中按 Ctrl+C 取消当前请求或命令；客户端断连也会取消后端模型请求。macOS/Linux 会终止命令进程组，Windows 目前只终止直接子进程。
-- 会话最多 1 MiB JSON 或 512 条消息，达到预算后需新建会话；工具执行前预留结果预算，不自动删除历史中的工具调用。
+- 后端已提交历史加当前轮最多 1 MiB JSON 或 512 条消息，达到预算后需新建会话；返回可执行工具批次前由后端预留结果预算，不自动删除历史中的工具调用。
 - 单个文本文件读写最多 1 MiB；工具结果最多 64 KiB（同时限制 JSON 编码大小），截断时明确标记；命令输出超限则终止该命令并返回工具错误。
 - `read_file` 每次最多返回 2000 行；`list_dir` 最多列出 2000 项。`grep` 最多遍历 2000 项、32 层、8 MiB 文件内容、返回 200 个匹配；跳过符号链接、过大文件、二进制内容和超过 4096 字符的行，并报告限制。
 - 搜索在独立 Worker 中执行，5 秒超时并支持取消；命令超时 120 秒；模型超时 120 秒，客户端请求超时 125 秒。
@@ -168,15 +188,18 @@ go list -m all  # 默认仅 minicoco，无第三方模块
 
 ```
 MiniCoco/
-├── backend/                      # ← 真实后端映射（后端：Go，无状态每轮代理）
+├── backend/                      # Go：持久化会话与单轮模型调用
 │   ├── main.go                   #   HTTP + SSE 入口 /chat/stream
-│   ├── agentloop.go              #   processRequest：单轮编排（无 for 循环）
+│   ├── agentloop.go              #   单轮入口与错误事件
+│   ├── sessions.go               #   历史、预占、模型调用、回写及成功回放
+│   ├── session_http.go           #   会话列表和恢复元数据
 │   ├── prompt.go                 #   genPrompt：系统提示词 + 工具清单（//go:embed 资源）
 │   ├── llm.go                    #   provider 选择 + 流式 + tool_call 解析（openai / mock）
 │   ├── protocol.go               #   SSE 事件类型 / 请求体
 │   ├── store.go / store_files.go #   三存储接口、数据类型和原子文件写入
 │   ├── metastore_json.go         #   JSON 会话元数据
 │   ├── transcript_jsonl.go       #   JSONL 消息、预占/回写和摘要
+│   ├── transcript_rounds.go      #   原子轮次预占、final 事件和用量检查点
 │   ├── coord_inproc.go           #   进程内 TTL 锁、固定窗口限流与开关
 │   ├── go.mod
 │   ├── prompts/system.txt        #   主系统提示词（编译进二进制）
@@ -185,7 +208,8 @@ MiniCoco/
 │   ├── package.json / tsconfig.json
 │   └── src/
 │       ├── cli.ts                #   入口（相当于 webview / IDE 端）
-│       ├── conversation.ts       #   Agent 主循环（真正的循环在这里）
+│       ├── conversation.ts       #   工具循环、sessionId 与未确认增量
+│       ├── sessions.ts           #   列表/恢复元数据请求
 │       ├── executor.ts           #   单轮：发请求 + 消费 SSE
 │       ├── sse.ts                #   SSE 解析
 │       ├── protocol.ts           #   与后端共用的事件类型
@@ -199,9 +223,9 @@ MiniCoco/
 
 ## 关键取舍
 
-- **历史放客户端**：这里让 client 持有完整 `messages` 并每轮回传，后端因此**完全无状态**。复杂前后端设计把历史存在 MongoDB，client 只回传新 query + 工具结果。两者「后端按轮组 prompt」的本质一致。
+- **历史放后端**：服务端从持久化 transcript 读取历史，客户端只提交增量；三个接口分离元数据、正文与协调。默认 JSON/JSONL/进程内实现便于离线运行，后续可选数据库档需实现同样的轮次和去重语义。
 - **原生 function calling**：直接用模型的 `tools` / `tool_calls`。真实前后端设计 还支持 XML 风格工具协议、prompt cache、ABTest 分流等。
-- **逐步完善实现**：已实现模型请求重试、一次性 JSON 兜底和独立可测的文件存储接口；当前调用链尚未接入会话持久化、上下文压缩算法、真实数据库、tracing、权限审批、memory、subagent / MCP。使用明确的预算和失败状态控制基本边界。
+- **逐步完善实现**：已实现模型请求重试、一次性 JSON 兜底、会话持久化和恢复；尚未实现上下文压缩算法、真实数据库、tracing、权限审批、memory、subagent / MCP。使用明确的预算和失败状态控制基本边界。
 - **工具集**：只保留 6 个最核心的（read/write/edit/list/grep/run_command）。加工具 = 在 `backend/tools/` 放一个 JSON + 在 `client/src/tools/` 写一个 Handler 并在 `createHandler` 注册。
 - **语言**：真实后端是 Java；这里用 Go 保持「编译型、单二进制、无框架」的最小形态，前端沿用 TypeScript。
 

@@ -30,13 +30,22 @@ type Event struct {
 	Retryable *bool `json:"retryable,omitempty"`
 }
 
-// ChatRequest is the body the client POSTs to /chat/stream. `Messages` is the
-// running OpenAI-shaped conversation the client maintains and replays each
-// round (so the backend stays stateless).
+// ChatRequest carries only the input for a single durable round. A round ID is
+// stable across retries; a fresh client must use fresh IDs even when resuming.
 type ChatRequest struct {
-	Messages  []map[string]any `json:"messages"`
-	Workspace string           `json:"workspace"`
-	Model     string           `json:"model"`
+	SessionID      string          `json:"sessionId"`
+	RoundID        string          `json:"roundId"`
+	Query          *string         `json:"query,omitempty"`
+	ToolUseResults []ToolUseResult `json:"toolUseResults,omitempty"`
+	Workspace      string          `json:"workspace"`
+	Model          string          `json:"model"`
 	// Absent/null retains the original streaming transport; false buffers events.
 	Stream *bool `json:"stream,omitempty"`
+}
+
+type ToolUseResult struct {
+	ID      string `json:"id"`
+	Name    string `json:"name"`
+	Output  string `json:"output"`
+	IsError bool   `json:"isError"`
 }

@@ -11,6 +11,8 @@ import (
 	"time"
 )
 
+var activeSessions *sessionService
+
 // HTTP + SSE entrypoint.
 //
 // Mirrors Coco's AutoworkChatController./chat/stream + CodeComposerJobExecutor:
@@ -28,15 +30,22 @@ func main() {
 	if err := configureMockFaults(); err != nil {
 		log.Fatal(err)
 	}
+	var err error
+	activeSessions, err = newSessionService(getenv("MINICOCO_DATA_DIR", "data"))
+	if err != nil {
+		log.Fatal(err)
+	}
 	host := getenv("MINICOCO_HOST", "127.0.0.1")
 	port := getenv("MINICOCO_PORT", "8017")
 	addr := host + ":" + port
 
 	http.HandleFunc("/health", handleHealth)
 	http.HandleFunc("/chat/stream", handleChatStream)
+	http.HandleFunc("/sessions", handleSessions)
+	http.HandleFunc("/sessions/", handleSessions)
 
 	fmt.Printf("[MiniCoco backend] http://%s  (LLM_PROVIDER=%s, LLM_MODEL=%s)\n", addr, getenv("LLM_PROVIDER", defaultProvider), getenv("LLM_MODEL", defaultModel))
-	fmt.Println("  POST /chat/stream   GET /health")
+	fmt.Println("  POST /chat/stream   GET /health   GET /sessions   GET /sessions/<id>")
 	server := &http.Server{Addr: addr, ReadHeaderTimeout: 5 * time.Second, ReadTimeout: 15 * time.Second, IdleTimeout: 60 * time.Second}
 	if err := server.ListenAndServe(); err != nil {
 		log.Fatal(err)
@@ -58,6 +67,7 @@ func handleChatStream(w http.ResponseWriter, r *http.Request) {
 	defer r.Body.Close()
 	r.Body = http.MaxBytesReader(w, r.Body, 2*1024*1024)
 	decoder := json.NewDecoder(r.Body)
+	decoder.DisallowUnknownFields()
 	if err := decoder.Decode(&req); err != nil {
 		var sizeError *http.MaxBytesError
 		code := http.StatusBadRequest
@@ -71,20 +81,31 @@ func handleChatStream(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "request must contain exactly one JSON object"})
 		return
 	}
-	if len(req.Messages) == 0 || len(req.Messages) > 512 || len(req.Model) > 256 || len(req.Workspace) > 4096 {
-		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid request limits"})
+	if err := validateDelta(req); err != nil {
+		writeJSON(w, 400, map[string]string{"error": err.Error()})
 		return
 	}
-	for _, message := range req.Messages {
-		role, _ := message["role"].(string)
-		if role != "user" && role != "assistant" && role != "tool" {
-			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid message role"})
-			return
-		}
+	if activeSessions == nil {
+		writeJSON(w, 503, map[string]string{"error": "session service unavailable"})
+		return
 	}
-
-	ctx, cancel := context.WithCancel(r.Context())
+	ctx, cancel := context.WithTimeout(r.Context(), 125*time.Second)
 	defer cancel()
+	if err := activeSessions.resolve(ctx, &req); err != nil {
+		writeSessionError(w, err)
+		return
+	}
+	w.Header().Set("X-Session-Id", req.SessionID)
+	unlock, ok, err := activeSessions.coord.Lock(ctx, "lock:session:"+req.SessionID, 250*time.Second)
+	if err != nil {
+		writeSessionError(w, err)
+		return
+	}
+	if !ok {
+		writeJSON(w, http.StatusTooEarly, map[string]string{"error": "session round in progress"})
+		return
+	}
+	defer unlock()
 	if req.Stream != nil && !*req.Stream {
 		writeBufferedCompletion(ctx, w, req)
 		return

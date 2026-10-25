@@ -42,7 +42,7 @@ func loadTools() []json.RawMessage {
 }
 
 // genPrompt builds the full message list sent to the model: a system message
-// (with the workspace injected) followed by the client's running conversation.
+// (with the workspace injected) followed by the server's persisted conversation.
 func genPrompt(clientMessages []map[string]any, workspace string) ([]map[string]any, []json.RawMessage) {
     sys := systemPrompt
     if workspace != "" {

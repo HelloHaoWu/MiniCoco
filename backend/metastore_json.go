@@ -13,8 +13,9 @@ import (
 )
 
 type metaSnapshot struct {
-	Sessions map[string]Session `json:"sessions"`
-	Likes    map[string]int     `json:"likes"`
+	Sessions   map[string]Session          `json:"sessions"`
+	Likes      map[string]int              `json:"likes"`
+	RoundUsage map[string]map[string]Usage `json:"round_usage,omitempty"`
 }
 
 type JSONMetaStore struct {
@@ -28,7 +29,7 @@ func NewJSONMetaStore(dataDir string) (*JSONMetaStore, error) {
 	if err != nil {
 		return nil, err
 	}
-	store := &JSONMetaStore{path: filepath.Join(dir, "meta.json"), state: metaSnapshot{Sessions: map[string]Session{}, Likes: map[string]int{}}}
+	store := &JSONMetaStore{path: filepath.Join(dir, "meta.json"), state: metaSnapshot{Sessions: map[string]Session{}, Likes: map[string]int{}, RoundUsage: map[string]map[string]Usage{}}}
 	data, err := os.ReadFile(store.path)
 	if os.IsNotExist(err) {
 		return store, nil
@@ -41,6 +42,9 @@ func NewJSONMetaStore(dataDir string) (*JSONMetaStore, error) {
 		return nil, fmt.Errorf("read metadata: %w", err)
 	}
 	store.state = loaded
+	if store.state.RoundUsage == nil {
+		store.state.RoundUsage = map[string]map[string]Usage{}
+	}
 	if store.state.Sessions == nil || store.state.Likes == nil {
 		return nil, fmt.Errorf("%w: incomplete metadata", ErrStoreInvalid)
 	}
@@ -52,6 +56,16 @@ func NewJSONMetaStore(dataDir string) (*JSONMetaStore, error) {
 	for id, like := range store.state.Likes {
 		if id == "" || like < -1 || like > 1 {
 			return nil, fmt.Errorf("%w: corrupt like metadata", ErrStoreInvalid)
+		}
+	}
+	for sid, rounds := range store.state.RoundUsage {
+		if _, exists := store.state.Sessions[sid]; !exists {
+			return nil, ErrStoreInvalid
+		}
+		for rid, usage := range rounds {
+			if rid == "" || !validUsage(usage) {
+				return nil, ErrStoreInvalid
+			}
 		}
 	}
 	return store, nil
@@ -68,12 +82,18 @@ func (store *JSONMetaStore) mutate(ctx context.Context, change func(*metaSnapsho
 	if err := ctx.Err(); err != nil {
 		return err
 	}
-	next := metaSnapshot{Sessions: make(map[string]Session, len(store.state.Sessions)), Likes: make(map[string]int, len(store.state.Likes))}
+	next := metaSnapshot{Sessions: make(map[string]Session, len(store.state.Sessions)), Likes: make(map[string]int, len(store.state.Likes)), RoundUsage: map[string]map[string]Usage{}}
 	for id, session := range store.state.Sessions {
 		next.Sessions[id] = session
 	}
 	for id, like := range store.state.Likes {
 		next.Likes[id] = like
+	}
+	for sid, rounds := range store.state.RoundUsage {
+		next.RoundUsage[sid] = map[string]Usage{}
+		for rid, usage := range rounds {
+			next.RoundUsage[sid][rid] = usage
+		}
 	}
 	if err := change(&next); err != nil {
 		return err
@@ -87,6 +107,39 @@ func (store *JSONMetaStore) mutate(ctx context.Context, change func(*metaSnapsho
 	}
 	store.state = next
 	return nil
+}
+
+func (store *JSONMetaStore) CommitRoundUsage(ctx context.Context, sid, roundID string, usage Usage, count int) error {
+	if roundID == "" || count < 0 || !validUsage(usage) {
+		return ErrStoreInvalid
+	}
+	return store.mutate(ctx, func(next *metaSnapshot) error {
+		session, exists := next.Sessions[sid]
+		if !exists {
+			return ErrStoreNotFound
+		}
+		if next.RoundUsage[sid] == nil {
+			next.RoundUsage[sid] = map[string]Usage{}
+		}
+		if previous, exists := next.RoundUsage[sid][roundID]; exists {
+			if previous != usage {
+				return ErrStoreConflict
+			}
+			return nil
+		}
+		if session.PromptTokens > math.MaxInt64-usage.Prompt || session.CompletionTokens > math.MaxInt64-usage.Completion || session.TotalTokens > math.MaxInt64-usage.Total {
+			return ErrStoreInvalid
+		}
+		session.PromptTokens += usage.Prompt
+		session.CompletionTokens += usage.Completion
+		session.TotalTokens += usage.Total
+		if count > session.MessageCount {
+			session.MessageCount = count
+		}
+		next.Sessions[sid] = session
+		next.RoundUsage[sid][roundID] = usage
+		return nil
+	})
 }
 
 func (store *JSONMetaStore) CreateSession(ctx context.Context, session Session) (string, error) {

@@ -3,6 +3,7 @@ package main
 import (
 	"bufio"
 	"bytes"
+	"context"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -75,6 +76,7 @@ func assertMockRound(t *testing.T, events []Event, attempt int) {
 }
 
 func TestFlakyMockHTTPRounds(t *testing.T) {
+	sessionFixture(t)
 	preserveMockBudget(t)
 	t.Setenv("LLM_PROVIDER", "mock")
 	t.Setenv("LLM_MOCK_MODE", "flaky")
@@ -85,9 +87,9 @@ func TestFlakyMockHTTPRounds(t *testing.T) {
 	for attempt := 0; attempt < 4; attempt++ {
 		health := httptest.NewRecorder()
 		handleHealth(health, httptest.NewRequest("GET", "/health", nil))
-		body := `{"messages":[{"role":"user","content":"test"}]}`
+		body := `{"roundId":"mock-first","query":"test"}`
 		if attempt == 3 {
-			body = `{"messages":[{"role":"tool","tool_call_id":"call_mock_1","content":"listing"}]}`
+			body = fmt.Sprintf(`{"sessionId":%q,"roundId":"mock-tools","toolUseResults":[{"id":"call_mock_1","name":"list_dir","output":"listing","isError":false}]}`, initialSessionID("mock-first"))
 		}
 		response := httptest.NewRecorder()
 		handleChatStream(response, httptest.NewRequest("POST", "/chat/stream", strings.NewReader(body)))
@@ -112,7 +114,7 @@ func TestFlakyMockConcurrentBudget(t *testing.T) {
 		group.Add(1)
 		go func() {
 			defer group.Done()
-			processRequest(ChatRequest{}, func(event Event) {
+			processModelContext(context.Background(), nil, "", "", func(event Event) {
 				if event.Type == EvError {
 					failures.Add(1)
 				}
@@ -187,7 +189,7 @@ func TestFlakyMockProcessIsolation(t *testing.T) {
 			reservation.Close()
 			command := exec.Command(executable, "-test.run=^TestFlakyBackendChild$")
 			command.Dir = t.TempDir()
-			command.Env = append(os.Environ(), "MINICOCO_TEST_FLAKY_CHILD=1", "LLM_PROVIDER=mock", "LLM_API_KEY=", "LLM_MOCK_MODE=flaky", "LLM_MOCK_FLAKY_FAILS=2", "MINICOCO_HOST=127.0.0.1", fmt.Sprintf("MINICOCO_PORT=%d", port))
+			command.Env = append(os.Environ(), "MINICOCO_DATA_DIR="+command.Dir+"/data", "MINICOCO_TEST_FLAKY_CHILD=1", "LLM_PROVIDER=mock", "LLM_API_KEY=", "LLM_MOCK_MODE=flaky", "LLM_MOCK_FLAKY_FAILS=2", "MINICOCO_HOST=127.0.0.1", fmt.Sprintf("MINICOCO_PORT=%d", port))
 			if err := command.Start(); err != nil {
 				t.Fatal(err)
 			}
@@ -210,9 +212,9 @@ func TestFlakyMockProcessIsolation(t *testing.T) {
 				t.Fatal("isolated backend failed to start")
 			}
 			for attempt := 0; attempt < 4; attempt++ {
-				body := `{"messages":[{"role":"user","content":"test"}]}`
+				body := `{"roundId":"mock-first","query":"test"}`
 				if attempt == 3 {
-					body = `{"messages":[{"role":"tool","tool_call_id":"call_mock_1","content":"listing"}]}`
+					body = fmt.Sprintf(`{"sessionId":%q,"roundId":"mock-tools","toolUseResults":[{"id":"call_mock_1","name":"list_dir","output":"listing","isError":false}]}`, initialSessionID("mock-first"))
 				}
 				response, err := client.Post(base+"/chat/stream", "application/json", bytes.NewBufferString(body))
 				if err != nil {

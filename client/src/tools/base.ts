@@ -23,14 +23,20 @@ export function integerArg(args: ToolArgs, key: string, fallback: number, max: n
     return value;
 }
 
+// Match Go's JSON encoding, including HTML and Unicode line-separator escapes,
+// so the server's reservation covers the bytes stored and sent upstream.
+function encodedOutputBytes(text: string): number {
+    return Buffer.byteLength(JSON.stringify(text).replace(/[<>&\u2028\u2029]/g, character => '\\u' + character.charCodeAt(0).toString(16).padStart(4, '0')));
+}
+
 export function boundedOutput(text: string): string {
     const bytes = Buffer.from(text);
-    if (bytes.length <= MAX_OUTPUT_BYTES && Buffer.byteLength(JSON.stringify(text)) <= MAX_OUTPUT_BYTES) return text;
+    if (bytes.length <= MAX_OUTPUT_BYTES && encodedOutputBytes(text) <= MAX_OUTPUT_BYTES) return text;
     const suffix = '\n... (output truncated)';
     let low = 0, high = Math.min(text.length, MAX_OUTPUT_BYTES);
     while (low < high) {
         const mid = Math.ceil((low + high) / 2);
-        if (Buffer.byteLength(JSON.stringify(text.slice(0, mid) + suffix)) <= MAX_OUTPUT_BYTES) low = mid;
+        if (encodedOutputBytes(text.slice(0, mid) + suffix) <= MAX_OUTPUT_BYTES) low = mid;
         else high = mid - 1;
     }
     return text.slice(0, low).replace(/[\uD800-\uDBFF]$/, '') + suffix;

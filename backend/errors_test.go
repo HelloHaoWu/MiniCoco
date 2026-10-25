@@ -124,7 +124,7 @@ func TestCompletionFailurePaths(t *testing.T) {
 				return &http.Response{StatusCode: test.status, Header: http.Header{"Content-Type": {test.contentType}}, Body: io.NopCloser(body), Request: r}, nil
 			})
 			var events []Event
-			processRequest(ChatRequest{}, func(event Event) { events = append(events, event) })
+			processModelContext(context.Background(), nil, "", "", func(event Event) { events = append(events, event) })
 			if len(events) < 2 {
 				t.Fatalf("missing error/done pair: %+v", events)
 			}

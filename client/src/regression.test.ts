@@ -27,7 +27,7 @@ async function fixture(fn: (workspace: string, ctx: HandlerContext, temp: string
 }
 
 async function server(fn: http.RequestListener, run: (url: string) => Promise<void>): Promise<void> {
-    const listener = http.createServer(fn);
+    const listener = http.createServer((req, res) => {res.setHeader('X-Session-Id', 's_test');fn(req, res);});
     listener.listen(0, '127.0.0.1'); await once(listener, 'listening');
     try { await run(`http://127.0.0.1:${(listener.address() as import('node:net').AddressInfo).port}`); }
     finally { listener.closeAllConnections(); await new Promise<void>(resolve => listener.close(() => resolve())); }
@@ -136,7 +136,7 @@ for (const [name, code, type, body] of [
     ['missing tools', 200, 'text/event-stream', events({type: 'done', finish_reason: 'tool_calls'})],
 ] as const) {
     test(`round rejects ${name}`, () => server((req, res) => {res.writeHead(code, {'Content-Type': type}); res.end(body);}, async url => {
-        await assert.rejects(() => runRound(url, [{role: 'user', content: 'test'}], '/tmp', ''));
+        await assert.rejects(() => runRound({serverUrl: url, sessionId: '', roundId: 'test', query: 'test', workspace: '/tmp', model: ''}));
     }));
 }
 
@@ -146,10 +146,10 @@ test('conversation distinguishes failure, exhaustion, cancellation and budget re
         const convo = new Conversation(url, ws, '', 1);
         assert.equal((await convo.run('test')).status, 'exhausted');
         assert(!fs.existsSync(path.join(ws, 'untouched')));
-        assert(!convo.messages.some(message => message.tool_calls));
+        assert(!('messages' in convo));
         const budget = new Conversation(url, ws);
         assert.equal((await budget.run('x'.repeat(MAX_HISTORY_BYTES))).status, 'failed');
-        assert.equal(budget.messages.length, 0);
+        assert(!('messages' in budget));
         const controller = new AbortController(); controller.abort();
         assert.equal((await convo.run('cancel', controller.signal)).status, 'cancelled');
     });
@@ -162,7 +162,7 @@ test('round cancellation interrupts a stalled response', () => server((req, res)
     res.writeHead(200, {'Content-Type': 'text/event-stream'});res.flushHeaders();
 }, async url => {
     const controller = new AbortController();
-    const pending = runRound(url, [{role: 'user', content: 'test'}], '/tmp', '', controller.signal);
+    const pending = runRound({serverUrl: url, sessionId: '', roundId: 'test', query: 'test', workspace: '/tmp', model: ''}, controller.signal);
     setTimeout(() => controller.abort(), 40);
     await assert.rejects(() => pending);
 }));
@@ -211,7 +211,7 @@ test('Go proxy and real CLI complete read → edit → command → final respons
     }, async upstream => {
         const reservation = http.createServer(); reservation.listen(0, '127.0.0.1'); await once(reservation, 'listening');
         const port = (reservation.address() as import('node:net').AddressInfo).port; await new Promise<void>(resolve => reservation.close(() => resolve()));
-        const child = spawn(binary, [], {cwd: temp, env: {...process.env, LLM_PROVIDER: 'openai', LLM_BASE_URL: upstream, LLM_API_KEY: 'fake-test-key', LLM_MODEL: 'test-model', MINICOCO_HOST: '127.0.0.1', MINICOCO_PORT: String(port)}, stdio: 'ignore'});
+        const child = spawn(binary, [], {cwd: temp, env: {...process.env, MINICOCO_DATA_DIR: path.join(temp, 'data'), LLM_PROVIDER: 'openai', LLM_BASE_URL: upstream, LLM_API_KEY: 'fake-test-key', LLM_MODEL: 'test-model', MINICOCO_HOST: '127.0.0.1', MINICOCO_PORT: String(port)}, stdio: 'ignore'});
         const exit = once(child, 'exit');
         try {
             let ready = false;
@@ -235,7 +235,7 @@ test('Go flaky backend and real CLI recover with default cancellable backoff', {
     assert.equal(build.status, 0, build.stderr);
     const reservation = http.createServer();reservation.listen(0, '127.0.0.1');await once(reservation, 'listening');
     const port = (reservation.address() as import('node:net').AddressInfo).port;await new Promise<void>(resolve => reservation.close(() => resolve()));
-    const child = spawn(binary, [], {cwd: temp, env: {...process.env, LLM_PROVIDER: 'mock', LLM_API_KEY: '', LLM_MOCK_MODE: 'flaky', LLM_MOCK_FLAKY_FAILS: '2', MINICOCO_HOST: '127.0.0.1', MINICOCO_PORT: String(port)}, stdio: 'ignore'});
+    const child = spawn(binary, [], {cwd: temp, env: {...process.env, MINICOCO_DATA_DIR: path.join(temp, 'data'), LLM_PROVIDER: 'mock', LLM_API_KEY: '', LLM_MOCK_MODE: 'flaky', LLM_MOCK_FLAKY_FAILS: '2', MINICOCO_HOST: '127.0.0.1', MINICOCO_PORT: String(port)}, stdio: 'ignore'});
     const exit = once(child, 'exit');
     try {
         let ready = false;
@@ -257,7 +257,7 @@ test('Go flaky backend recovers through one real JSON fallback and executes a to
     assert.equal(build.status, 0, build.stderr);
     const reservation = http.createServer();reservation.listen(0, '127.0.0.1');await once(reservation, 'listening');
     const port = (reservation.address() as import('node:net').AddressInfo).port;await new Promise<void>(resolve => reservation.close(() => resolve()));
-    const child = spawn(binary, [], {cwd: temp, env: {...process.env, LLM_PROVIDER: 'mock', LLM_API_KEY: '', LLM_MOCK_MODE: 'flaky', LLM_MOCK_FLAKY_FAILS: '2', MINICOCO_HOST: '127.0.0.1', MINICOCO_PORT: String(port)}, stdio: 'ignore'});
+    const child = spawn(binary, [], {cwd: temp, env: {...process.env, MINICOCO_DATA_DIR: path.join(temp, 'data'), LLM_PROVIDER: 'mock', LLM_API_KEY: '', LLM_MOCK_MODE: 'flaky', LLM_MOCK_FLAKY_FAILS: '2', MINICOCO_HOST: '127.0.0.1', MINICOCO_PORT: String(port)}, stdio: 'ignore'});
     const exit = once(child, 'exit');let fallbacks = 0;
     try {
         let ready = false;
@@ -269,10 +269,10 @@ test('Go flaky backend recovers through one real JSON fallback and executes a to
         const convo = new Conversation(`http://127.0.0.1:${port}`, ws, '', 25, {
             retryPolicy: {...RETRY_POLICY, maxRetries: 1, baseMs: 0, capMs: 0, jitter: 0},
             retryDependencies: {onRetry: () => {}, runNonStreaming: async (input, signal) => {
-                fallbacks++;return runRoundNonStreaming(input.serverUrl, input.messages, input.workspace, input.model, signal);
+                fallbacks++;return runRoundNonStreaming(input, signal);
             }},
         });
         const outcome = await convo.run('inspect workspace');assert.equal(outcome.status, 'completed', outcome.message);
-        assert.equal(fallbacks, 1);assert.equal(convo.messages.filter(message => message.role === 'tool').length, 1);assert.match(outcome.text, /Done\. I inspected/);
+        assert.equal(fallbacks, 1);assert(!('messages' in convo));assert.match(outcome.text, /Done\. I inspected/);
     } finally {child.kill('SIGTERM');await exit;}
 }));

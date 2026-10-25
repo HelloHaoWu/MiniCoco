@@ -99,13 +99,14 @@ func TestInvalidStreamsNeverEmitExecutableTools(t *testing.T) {
 func TestProcessFailureHasErrorFinish(t *testing.T) {
 	upstreamFixture(t, "", "text/event-stream")
 	var events []Event
-	processRequest(ChatRequest{}, func(event Event) { events = append(events, event) })
+	processModelContext(context.Background(), nil, "", "", func(event Event) { events = append(events, event) })
 	if len(events) != 2 || events[0].Type != EvError || events[1].FinishReason != "error" {
 		t.Fatalf("failure looked successful: %+v", events)
 	}
 }
 
 func TestHTTPValidation(t *testing.T) {
+	sessionFixture(t)
 	t.Setenv("LLM_PROVIDER", "mock")
 	for _, test := range []struct {
 		method, body string
@@ -114,8 +115,8 @@ func TestHTTPValidation(t *testing.T) {
 		{"GET", "", 405}, {"POST", "{", 400}, {"POST", `{}`, 400},
 		{"POST", `{"messages":[{"role":"system","content":"x"}]}`, 400},
 		{"POST", `{"messages":[{"role":"user","content":"x"}]} {}`, 400},
-		{"POST", `{"messages":[{"role":"user","content":"` + strings.Repeat("x", 2*1024*1024) + `"}]}`, 413},
-		{"POST", `{"messages":[{"role":"user","content":"x"}]}`, 200},
+		{"POST", `{"roundId":"large","query":"` + strings.Repeat("x", 2*1024*1024) + `"}`, 413},
+		{"POST", `{"roundId":"validation","query":"x"}`, 200},
 	} {
 		request := httptest.NewRequest(test.method, "/chat/stream", strings.NewReader(test.body))
 		response := httptest.NewRecorder()
@@ -127,6 +128,7 @@ func TestHTTPValidation(t *testing.T) {
 }
 
 func TestClientDisconnectCancelsUpstream(t *testing.T) {
+	sessionFixture(t)
 	t.Setenv("LLM_PROVIDER", "openai")
 	t.Setenv("LLM_API_KEY", "fake-key")
 	started, cancelled := make(chan struct{}), make(chan struct{})
@@ -144,7 +146,7 @@ func TestClientDisconnectCancelsUpstream(t *testing.T) {
 	defer backend.Close()
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-	request, _ := http.NewRequestWithContext(ctx, "POST", backend.URL, strings.NewReader(`{"messages":[{"role":"user","content":"test"}]}`))
+	request, _ := http.NewRequestWithContext(ctx, "POST", backend.URL, strings.NewReader(`{"roundId":"disconnect","query":"test"}`))
 	response, err := http.DefaultClient.Do(request)
 	if err != nil {
 		t.Fatal(err)
@@ -161,5 +163,13 @@ func TestClientDisconnectCancelsUpstream(t *testing.T) {
 	case <-cancelled:
 	case <-time.After(2 * time.Second):
 		t.Fatal("upstream did not receive cancellation")
+	}
+	round, err := activeSessions.transcript.Round(context.Background(), initialSessionID("disconnect"), "disconnect")
+	if err != nil || round.Final {
+		t.Fatalf("cancelled request committed an assistant reply: %#v, %v", round, err)
+	}
+	history, err := activeSessions.transcript.Latest(context.Background(), initialSessionID("disconnect"), 10)
+	if err != nil || len(history) != 0 {
+		t.Fatal("cancelled input leaked into committed history")
 	}
 }

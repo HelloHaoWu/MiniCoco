@@ -36,7 +36,11 @@ func streamCompletionContext(ctx context.Context, messages []map[string]any, too
 	case "openai":
 		return openaiStreamContext(ctx, messages, tools, model, emit)
 	case "mock":
-		return mockStream(messages, emit)
+		err := mockStream(messages, emit)
+		if err == nil {
+			recordUsage(ctx, Usage{1, 1, 2})
+		} // Synthetic test usage only.
+		return err
 	default:
 		return completionFailure(codeConfig, false, "unsupported LLM_PROVIDER; use openai or mock", nil)
 	}
@@ -45,6 +49,11 @@ func streamCompletionContext(ctx context.Context, messages []map[string]any, too
 // --- real provider: OpenAI-compatible streaming -----------------------------
 
 type oaChunk struct {
+	Usage *struct {
+		Prompt     int64 `json:"prompt_tokens"`
+		Completion int64 `json:"completion_tokens"`
+		Total      int64 `json:"total_tokens"`
+	} `json:"usage"`
 	Choices []struct {
 		Delta struct {
 			Content          string `json:"content"`
@@ -86,6 +95,7 @@ func openaiStreamContext(ctx context.Context, messages []map[string]any, tools [
 	payload := map[string]any{
 		"model": model, "messages": messages, "tools": tools,
 		"stream": true, "temperature": 0,
+		"stream_options": map[string]bool{"include_usage": true},
 	}
 	// This small client does not replay reasoning_content between tool turns.
 	// DeepSeek defaults to thinking mode; disable it for this text/tool harness.
@@ -123,6 +133,7 @@ func openaiStreamContext(ctx context.Context, messages []map[string]any, tools [
 
 	calls := map[int]*toolAcc{}
 	finish := ""
+	usage := Usage{}
 	done := false
 	limited := &io.LimitedReader{R: resp.Body, N: 4*1024*1024 + 1}
 	sc := bufio.NewScanner(limited)
@@ -150,6 +161,16 @@ func openaiStreamContext(ctx context.Context, messages []map[string]any, tools [
 		if data == "[DONE]" {
 			done = true
 			break
+		}
+		var usageChunk oaChunk
+		if json.Unmarshal([]byte(data), &usageChunk) != nil {
+			return fmt.Errorf("invalid LLM SSE JSON")
+		}
+		if usageChunk.Usage != nil {
+			usage = Usage{usageChunk.Usage.Prompt, usageChunk.Usage.Completion, usageChunk.Usage.Total}
+			if !validUsage(usage) {
+				return fmt.Errorf("invalid LLM usage")
+			}
 		}
 		if finish != "" {
 			// Usage-only chunks may follow the terminal choice.
@@ -250,8 +271,17 @@ func openaiStreamContext(ctx context.Context, messages []map[string]any, tools [
 		c := calls[i]
 		emit(Event{Type: EvToolCall, ID: c.id, Name: c.name, Arguments: json.RawMessage(c.args)})
 	}
+	recordUsage(ctx, usage)
 	emit(Event{Type: EvDone, FinishReason: finish})
 	return nil
+}
+
+type usageContextKey struct{}
+
+func recordUsage(ctx context.Context, usage Usage) {
+	if target, ok := ctx.Value(usageContextKey{}).(*Usage); ok {
+		*target = usage
+	}
 }
 
 func getenv(k, def string) string {

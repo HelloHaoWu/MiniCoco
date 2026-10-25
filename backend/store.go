@@ -6,8 +6,7 @@ import (
 	"time"
 )
 
-// Store implementations are independent of the HTTP/model loop until Phase 2
-// Part 2. The default file stores require a single writer instance per data dir.
+// The default file stores require a single writer instance per data directory.
 type Session struct {
 	ID               string `json:"id"`
 	User             string `json:"user"`
@@ -49,6 +48,9 @@ type MetaStore interface {
 	SetLastMessageCount(context.Context, string, int) error
 	SetLike(context.Context, string, int) error
 	ListSessions(context.Context, string) ([]Session, error)
+	// Apply a committed transcript round once, including recovery after a crash
+	// between transcript commit and metadata update.
+	CommitRoundUsage(ctx context.Context, sid, roundID string, usage Usage, messageCount int) error
 }
 
 type TranscriptStore interface {
@@ -59,6 +61,21 @@ type TranscriptStore interface {
 	// and storage metadata. n == 0 returns an empty slice; n < 0 is invalid.
 	Latest(ctx context.Context, sid string, n int) ([]Message, error)
 	SaveSummary(ctx context.Context, sid string, s Summary) error
+	Round(ctx context.Context, sid, roundID string) (StoredRound, error)
+	ReserveRound(ctx context.Context, sid, roundID, fingerprint string, input []Message, baseCount int) (StoredRound, error)
+	CommitRound(ctx context.Context, sid, roundID string, reply Message, usage Usage, events []Event) error
+	CommittedRounds(ctx context.Context, sid string) ([]StoredRound, error)
+}
+
+type StoredRound struct {
+	ID          string
+	ReplyID     string
+	Fingerprint string
+	BaseCount   int
+	InputCount  int
+	Final       bool
+	Usage       Usage
+	Events      []Event
 }
 
 type Coordinator interface {

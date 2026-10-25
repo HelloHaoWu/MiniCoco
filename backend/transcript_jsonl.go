@@ -55,7 +55,7 @@ func cloneStoreMessage(message Message) (Message, error) {
 			return nil, fmt.Errorf("%w: content must be a string or null", ErrStoreInvalid)
 		}
 	}
-	for _, key := range []string{"msg_id", "round_id", "status", "usage"} {
+	for _, key := range []string{"msg_id", "round_id", "status", "usage", "events", "request_hash", "base_count", "input_count"} {
 		if _, exists := message[key]; exists {
 			return nil, fmt.Errorf("%w: reserved message field %s", ErrStoreInvalid, key)
 		}
@@ -216,6 +216,9 @@ func (store *JSONLTranscriptStore) UpdateReply(ctx context.Context, msgID string
 	if previous == nil || previous["role"] != "assistant" {
 		return ErrStoreNotFound
 	}
+	if previous["request_hash"] != nil {
+		return ErrStoreInvalid
+	} // Use CommitRound for protocol rounds.
 	record["msg_id"], record["status"], record["usage"] = msgID, "final", map[string]int64{"prompt": usage.Prompt, "completion": usage.Completion, "total": usage.Total}
 	if previous["status"] == "final" {
 		before, _ := json.Marshal(previous)
@@ -244,6 +247,13 @@ func (store *JSONLTranscriptStore) Latest(ctx context.Context, sid string, n int
 	}
 	order := []string{}
 	latest := map[string]Message{}
+	boundRounds := map[string]bool{}
+	for _, record := range records {
+		if _, ok := record["request_hash"].(string); ok {
+			rid, _ := record["round_id"].(string)
+			boundRounds[rid] = record["status"] == "final"
+		}
+	}
 	for _, record := range records {
 		id := record["msg_id"].(string)
 		if _, exists := latest[id]; !exists {
@@ -254,10 +264,15 @@ func (store *JSONLTranscriptStore) Latest(ctx context.Context, sid string, n int
 	messages := []Message{}
 	for _, id := range order {
 		record := latest[id]
+		if rid, ok := record["round_id"].(string); ok {
+			if committed, bound := boundRounds[rid]; bound && !committed {
+				continue
+			}
+		}
 		if record["status"] == "pending" {
 			continue
 		}
-		for _, key := range []string{"msg_id", "round_id", "status", "usage"} {
+		for _, key := range []string{"msg_id", "round_id", "status", "usage", "events", "request_hash", "base_count", "input_count"} {
 			delete(record, key)
 		}
 		messages = append(messages, record)

@@ -1,12 +1,12 @@
 import {parseSSE} from './sse.ts';
-import {EV, FINISH, type Event, type Message, type ToolCall} from './protocol.ts';
+import {EV, FINISH, type Event, type Message, type ToolCall, type RoundRequest} from './protocol.ts';
 import {RoundError, abortError} from './roundError.ts';
 import {STREAM_TIMEOUT_MS, NONSTREAM_TIMEOUT_MS} from './tuning.ts';
 export {RoundError} from './roundError.ts';
 
-export interface RoundResult { assistant: Message; toolCalls: ToolCall[]; finish: string; }
-export interface RoundOptions { timeoutMs?: number; onEvent?: (event: Event) => void; }
-export interface RoundArgs { serverUrl: string; messages: Message[]; workspace: string; model: string; options?: RoundOptions; }
+export interface RoundResult { assistant: Message; toolCalls: ToolCall[]; finish: string; sessionId?: string; }
+export interface RoundOptions { timeoutMs?: number; onEvent?: (event: Event) => void; onSession?: (id: string) => void; }
+export interface RoundArgs extends RoundRequest { serverUrl: string; options?: RoundOptions; }
 
 // No I/O or conversation mutation: one validator for all event transports.
 export async function consumeEvents(source: Iterable<Event> | AsyncIterable<Event>): Promise<RoundResult> {
@@ -40,15 +40,16 @@ export async function consumeEvents(source: Iterable<Event> | AsyncIterable<Even
     return {assistant, toolCalls, finish};
 }
 
-export async function runRound(serverUrl: string, messages: Message[], workspace: string, model: string, signal?: AbortSignal, options: RoundOptions = {}): Promise<RoundResult> {
-    return executeRound(serverUrl, messages, workspace, model, true, signal, options);
+export async function runRound(args: RoundArgs, signal?: AbortSignal): Promise<RoundResult> {
+    return executeRound(args, true, signal);
 }
 
-export async function runRoundNonStreaming(serverUrl: string, messages: Message[], workspace: string, model: string, signal?: AbortSignal, options: RoundOptions = {}): Promise<RoundResult> {
-    return executeRound(serverUrl, messages, workspace, model, false, signal, options);
+export async function runRoundNonStreaming(args: RoundArgs, signal?: AbortSignal): Promise<RoundResult> {
+    return executeRound(args, false, signal);
 }
 
-async function executeRound(serverUrl: string, messages: Message[], workspace: string, model: string, stream: boolean, signal?: AbortSignal, options: RoundOptions = {}): Promise<RoundResult> {
+async function executeRound(args: RoundArgs, stream: boolean, signal?: AbortSignal): Promise<RoundResult> {
+    const {serverUrl, options = {}, ...request} = args;
     if (signal?.aborted) throw abortError(signal);
     const timeout = AbortSignal.timeout(options.timeoutMs ?? (stream ? STREAM_TIMEOUT_MS : NONSTREAM_TIMEOUT_MS));
     let response: Response | undefined;
@@ -61,11 +62,17 @@ async function executeRound(serverUrl: string, messages: Message[], workspace: s
         try { const url = new URL(serverUrl); if (!['http:', 'https:'].includes(url.protocol)) throw new Error('unsupported protocol'); }
         catch (cause) { throw new RoundError('server must be a valid HTTP(S) URL', 'protocol', {cause}); }
         response = await fetch(serverUrl.replace(/\/$/, '') + '/chat/stream', {
-            method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({messages, workspace, model, stream}),
+            method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({...request, stream}),
             signal: signal ? AbortSignal.any([signal, timeout]) : timeout,
         });
         fetching = false;
+        const sessionId = response.headers.get('x-session-id') ?? '';
+        if (sessionId) {
+            if (!/^[A-Za-z0-9_-]{1,128}$/.test(sessionId) || (args.sessionId && sessionId !== args.sessionId)) throw new RoundError('invalid or changed session ID', 'protocol');
+            options.onSession?.(sessionId);
+        }
         if (!response.ok) throw new RoundError(`backend HTTP ${response.status}`, 'http', {httpStatus: response.status});
+        if (!sessionId) throw new RoundError('missing X-Session-Id response header', 'protocol');
         const expectedType = stream ? 'text/event-stream' : 'application/json';
         if (!response.headers.get('content-type')?.toLowerCase().startsWith(expectedType) || !response.body) throw new RoundError(`backend did not return ${expectedType}`, 'protocol');
         const reader = response.body.getReader();
@@ -100,9 +107,9 @@ async function executeRound(serverUrl: string, messages: Message[], workspace: s
             if (!envelope || typeof envelope !== 'object' || !('events' in envelope) || !Array.isArray(envelope.events)) throw new RoundError('JSON response must contain an events array', 'protocol');
             const result = await consumeEvents(envelope.events as Event[]);
             for (const event of envelope.events as Event[]) render(event);
-            return result;
+            return {...result, sessionId};
         }
-        return await consumeEvents(events());
+        return {...await consumeEvents(events()), sessionId};
     } catch (cause) {
         if (signal?.aborted) throw abortError(signal);
         if (timeout.aborted) throw new RoundError('model request timed out', 'timeout', {cause});

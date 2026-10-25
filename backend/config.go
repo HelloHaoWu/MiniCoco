@@ -47,7 +47,7 @@ func loadEnvFile(path string) error {
 		}
 		key, value = strings.TrimSpace(key), strings.TrimSpace(value)
 		switch key {
-		case "LLM_PROVIDER", "LLM_BASE_URL", "LLM_MODEL", "LLM_API_KEY", "MINICOCO_HOST", "MINICOCO_PORT", "LLM_MOCK_MODE", "LLM_MOCK_FLAKY_FAILS":
+		case "LLM_PROVIDER", "LLM_BASE_URL", "LLM_MODEL", "LLM_API_KEY", "MINICOCO_HOST", "MINICOCO_PORT", "MINICOCO_DATA_DIR", "LLM_MOCK_MODE", "LLM_MOCK_FLAKY_FAILS":
 		default:
 			continue
 		}
