@@ -30,6 +30,9 @@ func main() {
 	if err := configureMockFaults(); err != nil {
 		log.Fatal(err)
 	}
+	if _, err := buildTools(ModeFull); err != nil {
+		log.Fatal(err)
+	}
 	var err error
 	var closeStores func()
 	startup, stopStartup := context.WithTimeout(context.Background(), 15*time.Second)

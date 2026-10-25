@@ -3,16 +3,18 @@ import * as readline from 'node:readline';
 import {Conversation} from './conversation.ts';
 import {getSession, listSessions} from './sessions.ts';
 import {realpathSync} from 'node:fs';
+import {normalizeMode} from './toolMode.ts';
+import type {ToolMode} from './protocol.ts';
 
-interface Args { query: string[]; workspace: string; workspaceGiven: boolean; server: string; model: string; maxRounds: number; resume: string; list: boolean; }
+interface Args { query: string[]; workspace: string; workspaceGiven: boolean; server: string; model: string; maxRounds: number; resume: string; list: boolean; mode: ToolMode; }
 
 function parseArgs(argv: string[]): Args {
-    const args: Args = {query: [], workspace: process.cwd(), workspaceGiven: false, server: process.env.MINICOCO_SERVER || 'http://127.0.0.1:8017', model: '', maxRounds: 25, resume: '', list: false};
+    const args: Args = {query: [], workspace: process.cwd(), workspaceGiven: false, server: process.env.MINICOCO_SERVER || 'http://127.0.0.1:8017', model: '', maxRounds: 25, resume: '', list: false, mode: 'full'};
     for (let i = 0; i < argv.length; i++) {
         const key = argv[i];
         if (key === '--') { args.query.push(...argv.slice(i + 1)); break; }
         if (key === '--list') {args.list = true;continue;}
-        if (['--workspace', '--server', '--model', '--max-rounds', '--resume'].includes(key)) {
+        if (['--workspace', '--server', '--model', '--max-rounds', '--resume', '--mode'].includes(key)) {
             const value = argv[++i];
             if (!value || value.startsWith('--')) throw new Error(`${key} requires a value`);
             if (key === '--workspace') {args.workspace = value;args.workspaceGiven = true;}
@@ -20,6 +22,7 @@ function parseArgs(argv: string[]): Args {
             if (key === '--model') args.model = value;
             if (key === '--max-rounds') args.maxRounds = Number(value);
             if (key === '--resume') args.resume = value;
+            if (key === '--mode') args.mode = normalizeMode(value);
         } else if (key.startsWith('--')) throw new Error(`unknown option: ${key}`);
         else args.query.push(key);
     }
@@ -42,8 +45,8 @@ async function main(): Promise<void> {
         args.workspace = session.workspace;
         if (!args.model) args.model = session.model;
     }
-    const convo = new Conversation(args.server, path.resolve(args.workspace), args.model, args.maxRounds, {sessionId: args.resume, onSession: id => process.stderr.write(`\n[session] ${id}\n`)});
-    process.stdout.write(`MiniCoco  server=${args.server}  model=${args.model || '(backend default)'}  workspace=${convo.workspace}\n`);
+    const convo = new Conversation(args.server, path.resolve(args.workspace), args.model, args.maxRounds, {mode: args.mode, sessionId: args.resume, onSession: id => process.stderr.write(`\n[session] ${id}\n`)});
+    process.stdout.write(`MiniCoco  server=${args.server}  model=${args.model || '(backend default)'}  mode=${args.mode}  workspace=${convo.workspace}\n`);
     let active: AbortController | undefined;
     let rl: readline.Interface | undefined;
     let closed = false;

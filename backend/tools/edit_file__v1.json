@@ -1,5 +1,6 @@
 {
   "type": "function",
+  "availableVersion": 1,
   "function": {
     "name": "edit_file",
     "description": "Replace an exact substring in a file. old_string must appear exactly once in the file.",

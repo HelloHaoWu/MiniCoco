@@ -39,6 +39,7 @@ type ChatRequest struct {
 	ToolUseResults []ToolUseResult `json:"toolUseResults,omitempty"`
 	Workspace      string          `json:"workspace"`
 	Model          string          `json:"model"`
+	Mode           Mode            `json:"mode,omitempty"` // Absent/empty means full.
 	// Absent/null retains the original streaming transport; false buffers events.
 	Stream *bool `json:"stream,omitempty"`
 }

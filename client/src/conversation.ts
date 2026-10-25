@@ -4,7 +4,8 @@ import {RETRY_POLICY, type RetryPolicy} from './tuning.ts';
 import {RoundError} from './roundError.ts';
 import {createHandler, HandlerContext, ToolError} from './tools/index.ts';
 import {boundedOutput} from './tools/base.ts';
-import {FINISH, type RoundRequest, type ToolCall, type ToolUseResult} from './protocol.ts';
+import {FINISH, type RoundRequest, type ToolCall, type ToolUseResult, type ToolMode} from './protocol.ts';
+import {normalizeMode, toolAllowed} from './toolMode.ts';
 
 export const MAX_HISTORY_BYTES = 1024 * 1024;
 export interface RunResult {
@@ -14,7 +15,7 @@ export interface RunResult {
     sessionId?: string;
     message?: string;
 }
-export interface ConversationOptions { sessionId?: string; onSession?: (id: string) => void; retryPolicy?: RetryPolicy; retryDependencies?: RetryDependencies; }
+export interface ConversationOptions { mode?: ToolMode; sessionId?: string; onSession?: (id: string) => void; retryPolicy?: RetryPolicy; retryDependencies?: RetryDependencies; }
 
 // Only session identity and an unacknowledged delta are kept here. The server
 // owns full history, budgets, input reservations and successful-round commits.
@@ -26,6 +27,7 @@ export class Conversation {
     ctx: HandlerContext;
     sessionId: string;
     private running = false;
+    private readonly mode: ToolMode;
     private options: ConversationOptions;
     private pending?: {request: RoundRequest; query: string};
 
@@ -40,11 +42,12 @@ export class Conversation {
         this.model = model;
         this.maxRounds = maxRounds;
         this.options = options;
+        this.mode = normalizeMode(options.mode);
         this.sessionId = options.sessionId ?? '';
     }
 
     private nextRequest(delta: {query: string} | {toolUseResults: ToolUseResult[]}): RoundRequest {
-        return {sessionId: this.sessionId, roundId: `${this.sessionId || 'new'}-r-${randomUUID()}`, workspace: this.workspace, model: this.model, ...delta};
+        return {sessionId: this.sessionId, roundId: `${this.sessionId || 'new'}-r-${randomUUID()}`, workspace: this.workspace, model: this.model, mode: this.mode, ...delta};
     }
 
     async run(query: string, signal?: AbortSignal): Promise<RunResult> {
@@ -66,6 +69,11 @@ export class Conversation {
                 }}}, this.options.retryPolicy ?? RETRY_POLICY, signal, this.options.retryDependencies);
                 this.sessionId = result.sessionId ?? this.sessionId;
                 if (!this.sessionId) throw new Error('backend did not identify the session');
+                // Check the whole batch before any local side effect, including
+                // injected transports that bypass the normal event consumer.
+                for (const call of result.toolCalls) {
+                    if (!toolAllowed(this.mode, call.name)) throw new RoundError(`tool ${call.name} is not allowed in mode ${this.mode}`, 'protocol');
+                }
                 if (result.finish === FINISH.STOP) {
                     this.pending = undefined;
                     return {status: 'completed', text: result.assistant.content ?? '', rounds, sessionId: this.sessionId};
@@ -102,6 +110,7 @@ export class Conversation {
         try {
             const handler = createHandler(call.name, this.ctx);
             if (!handler) throw new ToolError(`unknown tool: ${call.name}`);
+            if (!toolAllowed(this.mode, call.name)) throw new ToolError(`tool ${call.name} is not allowed in mode ${this.mode}`);
             result = await handler.execute(call.arguments);
         } catch (error) {
             if (this.ctx.signal?.aborted) throw error;

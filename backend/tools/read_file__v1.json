@@ -1,5 +1,6 @@
 {
   "type": "function",
+  "availableVersion": 1,
   "function": {
     "name": "read_file",
     "description": "Read a file from the local filesystem and return its contents with line numbers (cat -n style). Optionally read a slice with offset/limit. Text files are limited to 1 MiB; output is capped at 64 KiB and may be truncated.",

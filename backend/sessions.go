@@ -38,6 +38,9 @@ func initialSessionID(roundID string) string {
 }
 
 func validateDelta(req ChatRequest) error {
+	if _, err := normalizeMode(req.Mode); err != nil {
+		return err
+	}
 	if req.RoundID == "" || len(req.RoundID) > 256 || len(req.Model) > 256 || len(req.Workspace) > 4096 || (req.SessionID != "" && !validSessionID(req.SessionID)) {
 		return ErrStoreInvalid
 	}
@@ -169,6 +172,15 @@ func incomingMessages(req ChatRequest, history []Message) ([]Message, error) {
 func compressSeam(ctx context.Context, session Session) error { return ctx.Err() }
 
 func (service *sessionService) process(ctx context.Context, req ChatRequest, emit func(Event)) error {
+	mode, err := normalizeMode(req.Mode)
+	if err != nil {
+		return completionFailure(codeBadRequest, false, err.Error(), err)
+	}
+	// Empty/full retains pre-Phase-3 fingerprints, including successful replays.
+	identityMode := mode
+	if mode == ModeFull {
+		identityMode = ""
+	}
 	if err := service.reconcile(ctx, req.SessionID); err != nil {
 		return storageFailure(err)
 	}
@@ -176,7 +188,8 @@ func (service *sessionService) process(ctx context.Context, req ChatRequest, emi
 		Query            *string
 		Results          []ToolUseResult
 		Workspace, Model string
-	}{req.Query, req.ToolUseResults, req.Workspace, req.Model})
+		Mode             Mode `json:",omitempty"`
+	}{req.Query, req.ToolUseResults, req.Workspace, req.Model, identityMode})
 	hash := sha256.Sum256(encoded)
 	fingerprint := hex.EncodeToString(hash[:])
 	round, roundErr := service.transcript.Round(ctx, req.SessionID, req.RoundID)
@@ -230,7 +243,10 @@ func (service *sessionService) process(ctx context.Context, req ChatRequest, emi
 	for i, message := range current {
 		messages[i] = message
 	}
-	messages, tools := genPrompt(messages, req.Workspace)
+	messages, tools, err := genPrompt(messages, req.Workspace, mode)
+	if err != nil {
+		return err
+	}
 	buffer := eventBuffer{events: []Event{}}
 	modelCtx, cancel := context.WithCancel(ctx)
 	defer cancel()
@@ -256,6 +272,9 @@ func (service *sessionService) process(ctx context.Context, req ChatRequest, emi
 		return err
 	}
 	if err := ctx.Err(); err != nil {
+		return err
+	}
+	if err := validateToolMode(mode, buffer.events); err != nil {
 		return err
 	}
 	reply, err := replyFromEvents(buffer.events)

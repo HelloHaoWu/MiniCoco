@@ -1,5 +1,6 @@
 import {parseSSE} from './sse.ts';
-import {EV, FINISH, type Event, type Message, type ToolCall, type RoundRequest} from './protocol.ts';
+import {EV, FINISH, type Event, type Message, type ToolCall, type RoundRequest, type ToolMode} from './protocol.ts';
+import {normalizeMode, toolAllowed} from './toolMode.ts';
 import {RoundError, abortError} from './roundError.ts';
 import {STREAM_TIMEOUT_MS, NONSTREAM_TIMEOUT_MS} from './tuning.ts';
 export {RoundError} from './roundError.ts';
@@ -9,7 +10,8 @@ export interface RoundOptions { timeoutMs?: number; onEvent?: (event: Event) => 
 export interface RoundArgs extends RoundRequest { serverUrl: string; options?: RoundOptions; }
 
 // No I/O or conversation mutation: one validator for all event transports.
-export async function consumeEvents(source: Iterable<Event> | AsyncIterable<Event>): Promise<RoundResult> {
+export async function consumeEvents(source: Iterable<Event> | AsyncIterable<Event>, mode: ToolMode = 'full'): Promise<RoundResult> {
+    mode = normalizeMode(mode);
     const text: string[] = [], toolCalls: ToolCall[] = [];
     const ids = new Set<string>();
     let finish = '';
@@ -23,6 +25,7 @@ export async function consumeEvents(source: Iterable<Event> | AsyncIterable<Even
             if (typeof event.id !== 'string' || !event.id || event.id.length > 256 || typeof event.name !== 'string' || !event.name || event.name.length > 128 ||
                 !event.arguments || typeof event.arguments !== 'object' || Array.isArray(event.arguments) || ids.has(event.id)) throw new RoundError('invalid or duplicate tool call', 'protocol');
             if (toolCalls.length >= 16) throw new RoundError('too many tool calls in one round', 'protocol');
+            if (!toolAllowed(mode, event.name)) throw new RoundError(`tool ${event.name} is not allowed in mode ${mode}`, 'protocol');
             ids.add(event.id);
             toolCalls.push({id: event.id, name: event.name, arguments: event.arguments});
         } else if (event.type === EV.ERROR) {
@@ -59,6 +62,7 @@ async function executeRound(args: RoundArgs, stream: boolean, signal?: AbortSign
         if (event.type === EV.TEXT || event.type === EV.REASONING) process.stdout.write(event.delta!);
     });
     try {
+        const mode = normalizeMode(args.mode);
         try { const url = new URL(serverUrl); if (!['http:', 'https:'].includes(url.protocol)) throw new Error('unsupported protocol'); }
         catch (cause) { throw new RoundError('server must be a valid HTTP(S) URL', 'protocol', {cause}); }
         response = await fetch(serverUrl.replace(/\/$/, '') + '/chat/stream', {
@@ -105,11 +109,11 @@ async function executeRound(args: RoundArgs, stream: boolean, signal?: AbortSign
             try { envelope = JSON.parse(new TextDecoder('utf-8', {fatal: true}).decode(Buffer.concat(buffers))); }
             catch (cause) { throw new RoundError('invalid JSON response', 'protocol', {cause}); }
             if (!envelope || typeof envelope !== 'object' || !('events' in envelope) || !Array.isArray(envelope.events)) throw new RoundError('JSON response must contain an events array', 'protocol');
-            const result = await consumeEvents(envelope.events as Event[]);
+            const result = await consumeEvents(envelope.events as Event[], mode);
             for (const event of envelope.events as Event[]) render(event);
             return {...result, sessionId};
         }
-        return {...await consumeEvents(events()), sessionId};
+        return {...await consumeEvents(events(), mode), sessionId};
     } catch (cause) {
         if (signal?.aborted) throw abortError(signal);
         if (timeout.aborted) throw new RoundError('model request timed out', 'timeout', {cause});

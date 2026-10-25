@@ -47,6 +47,7 @@ export interface Message {
 }
 
 export interface ToolUseResult { id: string; name: string; output: string; isError: boolean; }
+export type ToolMode = 'full' | 'readonly' | 'safe';
 export interface RoundRequest {
     sessionId: string;
     roundId: string;
@@ -54,6 +55,7 @@ export interface RoundRequest {
     toolUseResults?: ToolUseResult[];
     workspace: string;
     model: string;
+    mode?: ToolMode;
 }
 export interface Session {
     id: string; user: string; model: string; workspace: string; created_at: number;

@@ -1,5 +1,6 @@
 {
   "type": "function",
+  "availableVersion": 1,
   "function": {
     "name": "list_dir",
     "description": "List the entries (files and sub-directories) of a directory.",

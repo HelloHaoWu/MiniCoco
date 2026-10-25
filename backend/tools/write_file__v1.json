@@ -1,5 +1,6 @@
 {
   "type": "function",
+  "availableVersion": 1,
   "function": {
     "name": "write_file",
     "description": "Create a new file or overwrite an existing file with the given complete content.",

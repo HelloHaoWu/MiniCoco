@@ -10,7 +10,7 @@
     "scripts": {
         "start": "node src/cli.ts",
         "selftest": "node src/selftest.ts",
-        "test": "node --test src/*.test.ts",
+        "test": "node scripts/test.ts",
         "typecheck": "tsc --noEmit"
     },
     "devDependencies": {

@@ -1,5 +1,6 @@
 {
   "type": "function",
+  "availableVersion": 1,
   "function": {
     "name": "grep",
     "description": "Search file contents for a regular expression and return matching lines with file path and line number. Bounded search: at most 200 matches, 2000 entries, 8 MiB input and 5 seconds; skips symlinks, large/binary files and very long lines.",

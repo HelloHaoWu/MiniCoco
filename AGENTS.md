@@ -8,6 +8,7 @@
 - 开始改动前检查 Git 状态，保留已有修改；本仓库的 Git 操作在本目录执行。真实密钥和 .env 不得进入提交或日志。
 - **每次完成代码、配置或文档改动后，检查本 AGENTS.md 并根据实际变化动态修改。** 核对目标、目录、架构与协议、阶段进度、运行与自测命令、验证结果及能力边界；事实未变无需机械改写。若工作区上层 AGENTS.md 存在，同步其中涉及的同一事实，并在上层 ChangeLogs/ 记录检查结果和必要修订。
 - 协议变更同步 Go/TypeScript 类型、消费器、mock、测试和产品说明。模型请求重试不得重复执行有副作用的工具，失败轮不得提交不完整 assistant/tool 批次；取消须贯穿请求、退避和工具，已执行的副作用不得声称回滚。
+- 工具增加/升级需使用 name__vN.json 与 availableVersion，更新后端注册顺序、模式策略及客户端 Handler/策略。模式必须贯穿请求、重试和执行；完整批次检查在任何本地副作用之前完成。同轮不得变更模式，默认 full 保留旧轮次指纹。模式不是鉴权或 OS 沙箱。
 - 每个 Part 达到对应行为验收要求后才标记完成；执行统一检查，区分历史验证与本次新运行结果。真实库验收使用 check_realdb.sh 并显式指定测试服务；缺少服务的 skip 不算验收通过。
 - 在本工作区，每完成一个 Part 并通过验收，检查更新两层 AGENTS、完成上层 ChangeLog 及索引后，自动提交该 Part 的相关代码和仓库内文档并推送 GitHub 一次，用户已授权，无需逐次询问。提交前检查 diff/暂存范围，只提交相关改动，核实目标分支，不强推、不自动合并 PR。如实记录提交号及推送结果。
 - 上层 AgentDocs/、ChangeLogs/、AGENTS.md 位于本仓库外，推送本仓库不会上传它们，不擅自改变仓库边界。独立克隆缺少阶段资料时，不根据摘要补造设计或验收结果。
@@ -15,14 +16,18 @@
 ## 目录与当前架构
 
 - backend/：Go 持久化单轮请求服务。main.go 接收 HTTP 请求，agentloop.go 编排单轮，llm.go 调用模型；errors.go 分类失败，mock.go 提供确定性故障预算，transport.go 收集有界 JSON 事件。prompts/ 和 tools/ 编译嵌入提示词及六个工具 Schema。
+- backend/tools.go：ToolName 注册、固定 read/list/grep/write/edit/run_command 顺序、兼容最高 Schema 版本与模式过滤；tools/*__vN.json 含最低 Harness 版本 availableVersion，当前内部版本 1，元数据不发给供应商。prompt.go 使用请求模式构建清单，启动时检查全部资源。
 - backend/sessions.go：稳定首轮会话、已提交历史、输入/预占、模型调用、final 和元数据回写、成功事件回放；session_http.go 提供列表和恢复元数据。
 - backend/store.go：MetaStore / TranscriptStore / Coordinator 三接口。默认 metastore_json.go、transcript_jsonl.go、transcript_rounds.go、coord_inproc.go 实现 JSON 元数据、原子 JSONL 轮次、进程内协调；store_files.go 负责 ID 与原子文件写入。
 - backend/wire_stores.go / wire_file.go / wire_realdb.go：按 STORE_BACKEND=file|real 装配，默认 file；未编入 realdb 的程序选择 real 时明确报错。metastore_sqlite_realdb.go、transcript_mongo_realdb.go、coord_redis_realdb.go 为可选实现；emitter.go 串行化本地/Redis 对 SSE 的投递。
 - backend/store_contract_test.go：两档共用接口用例；stores_realdb_test.go：真实服务、并发唯一键、用量、跨进程协调及 HTTP/CLI 验收。默认 go.mod 为 Go 1.22、零第三方模块；go.realdb.mod / .sum 锁定可选驱动，要求 Go ≥ 1.26。
 - client/src/：TypeScript CLI 和本地 Agent 循环。conversation.ts 只持有 sessionId/未确认增量并执行工具，sessions.ts 获取列表和恢复信息；executor.ts 校验事件，roundError.ts 定义错误，retry.ts 负责固定 roundId 重试和可取消退避，sse.ts 解析有界 SSE；tools/ 实现文件、搜索及命令工具。
+- client/src/toolMode.ts 与 toolMode.test.ts：模式策略及两端协议消费/执行/CLI 回归；client/scripts/test.ts 为各测试文件启动独立进程，进程内直接运行 Node 原生测试，避开当前 Node 24.19.0 的内部 V8/stdout 转发缺陷；不移除文件级进程隔离。npm test 使用此入口，类型检查包括 scripts/。
 - check.sh：默认统一验收；check_default_deps.sh：空模块缓存、禁用下载检查；check_realdb.sh：显式真实服务验收；run_backend.sh / run_backend_realdb.sh / run_client.sh：启动入口。README.md 和 .env.example 提供使用及配置说明。
 
 客户端提交 sessionId + 固定 roundId + query 或 toolUseResults 增量，完整历史与预算在后端；旧 messages 请求拒绝。首轮由固定 roundId 派生会话，响应头丢失也不重复创建；输入和 pending 原子预占，失败输入不进入 Latest，成功轮保存事件后直接回放。同会话并发返回 425。工作区绑定会话，恢复时使用保存的规范路径。
+
+mode 可选，省略/空串等价 full（六个工具）；readonly 仅 read_file/list_dir/grep，safe 仅禁用 run_command、仍可写文件。CLI --mode 在本次调用每轮及重试/JSON 兜底保持固定，--resume 不继承上次模式，需显式重新指定。模式不作为会话权限保存。后端整批检查后才提交/暴露工具，客户端消费者和本地执行再次检查，未知工具拒绝；同 roundId 不能换模式。只有 full 在指纹中省略 Mode 字段，以兼容 Phase 2 已存储轮次。
 
 工具输出按 Go JSON 转义限制为 64 KiB（含 HTML/Unicode 分隔符）；预留结果预算、提交 final 和元数据后才发送完整可执行工具批次/成功 done。CommitRoundUsage 按轮去重聚合，不能再对同轮额外 BumpUsage；transcript final 修复中断的元数据回写。缺失供应商 usage 时记 0，mock 每轮 1/1/2 是合成计数；成功用量不等于供应商全部计费。
 
@@ -38,13 +43,14 @@ Redis 提供 TTL 锁、Lua CAS 解锁、固定窗口限流和 feature_toggle 开
 
 ## 阶段与验证状态
 
-Phase 1 三个 Part、Phase 2 三个 Part 均已实现并验收。本次为可选 Phase 2 Part 3，前置已推送基线 a4c7f6a；实际发布记录见上层 ChangeLog 010。Phase 3—4、真实压缩、跨机器控制面和跨进程工具日志未实现，本次不进入下一 Part。
+Phase 1 三个 Part、Phase 2 三个 Part 和 Phase 3 Part 1 均已实现并验收。本次前置已推送基线 ac377ee；发布详情见上层 ChangeLog 011。Phase 3 Part 2 formatter、Phase 4、真实压缩、跨机器控制面和跨进程工具日志未实现，本次不进入下一 Part。
 
 2026-10-25 本次完整验收：
 
-- 默认 check.sh 通过：空模块缓存/禁用下载/无 cgo 构建、模块与非标准库列表仅 minicoco；Go -race、vet、构建；TypeScript 类型检查、10 项工具自测、44 项客户端测试。默认后端覆盖率 83.3%。
-- check_realdb.sh 通过：同一组 5 类接口子用例分别运行 file 和 real；SQLite 双连接用量去重、Mongo 并发唯一键与 final CAS、Redis 开关、真实 HTTP SSE、两个独立进程锁竞争与 inbox；真实库 CLI --list/--resume、重开存储后的 JSON 回放不重复正文/用量。真实档全量 -race、vet、无 cgo 构建及驱动包含检查通过，覆盖率 81.7%。
-- 测试使用临时 SQLite、独立端口的真实 MongoDB 8.0.16 / Redis 8.10.2、随机数据库/前缀、本机模拟模型与假密钥。未调用真实模型 API。首次检查中的路径断言差异已修正；一次 Node 测试运行器反序列化失败单独及完整重跑通过，经过如实记入 ChangeLog。
+- 默认 check.sh 通过：空模块缓存/禁用下载/无 cgo 构建、模块与非标准库列表仅 minicoco；Go -race、vet、构建；TypeScript 类型检查、10 项工具自测、49 项客户端测试（5 个独立测试文件全部成功）。默认后端覆盖率 83.4%。
+- 新增 5 项 Go 专项覆盖三模式稳定顺序、兼容最高数值版本、非法资源/模式、实际 SSE/JSON 上游清单、整批禁用工具不提交、旧轮次指纹兼容和换模式冲突；新增 5 项客户端专项覆盖传输、消费、执行、无副作用、重试模式固定和 CLI。六个 v1 函数定义与 ac377ee 基线逐一比较一致。
+- check_realdb.sh 全量 -race、vet、无 cgo 构建和驱动包含检查通过，覆盖率 81.9%；继续执行两档共同接口、真实 SQL/Mongo/Redis 并发去重、跨进程锁/inbox、HTTP SSE、CLI 恢复及重开回放。未改存储接口或驱动依赖。
+- 测试使用临时 SQLite、独立端口真实 MongoDB 8.0.16 / Redis 8.10.2、随机数据库/前缀、本机模拟模型与假密钥。未调用真实模型 API。首次客户端完整运行再次出现 Node 内部反序列化失败；本次核对内置源码与 Node 官方 #64706 后采用独立进程直接测试入口，最终完整验收通过，详见 ChangeLog 011。
 
 从仓库根目录执行，默认要求 Go ≥ 1.22、Node ≥ 24：
 
@@ -54,6 +60,8 @@ bash check.sh
 LLM_PROVIDER=mock bash run_backend.sh
 # 另一个终端
 ./run_client.sh "列出工作区文件" --workspace /path/to/workspace
+# 只读检查；safe 允许文件修改但不执行命令
+./run_client.sh "检查项目" --workspace /path/to/workspace --mode readonly
 ```
 
 真实档要求 Go ≥ 1.26，先准备 MongoDB / Redis 并设置连接配置：

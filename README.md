@@ -41,6 +41,26 @@ LLM_PROVIDER=mock bash run_backend.sh
 
 mock 模型走确定性的两轮循环 (list_dir -> 给结论), 证明闭环跑通, 不需要网络
 
+#### 工具模式与 Schema 版本（Phase 3 Part 1）
+
+```bash
+./run_client.sh "只检查代码并提出建议" --workspace /path/to/project --mode readonly
+./run_client.sh "修改代码，不执行命令" --workspace /path/to/project --mode safe
+./run_client.sh "修复并运行测试" --workspace /path/to/project --mode full
+```
+
+| mode | 开放的工具 |
+| --- | --- |
+| full（默认） | read_file、list_dir、grep、write_file、edit_file、run_command |
+| readonly | read_file、list_dir、grep |
+| safe | read_file、list_dir、grep、write_file、edit_file |
+
+请求体可选字段 `mode` 使用同名值，省略或空串等价 full，其他值拒绝。CLI 在本次调用的每轮请求、重试和 JSON 兜底中保持同一模式；`--resume` 不自动继承上次模式，需要再次指定 `--mode readonly` 等选项。模式不是持久化的会话权限，也不是操作系统沙箱；safe 仍允许修改文件。
+
+后端按模式过滤发给模型的工具清单，并在成功提交前检查模型返回的完整工具批次；含禁用或未知工具则整批拒绝，不提交失败轮历史，也不发出可执行工具事件。客户端 SSE/JSON 校验和本地执行入口再次检查，整批验证后才执行，避免前面合法的工具先产生副作用。同一个 roundId 改变模式会失败；省略和显式 full 保留已有成功轮的回放兼容性。
+
+工具资源现为 `backend/tools/<name>__vN.json`，`function.name` 保持原名；增加的 `availableVersion` 表示最低 Harness 协议版本，当前内部版本为 1，尚未开放客户端选择。加载器为每个工具选择**兼容版本中数值最大的 N**，再按 read/list/grep/write/edit/run_command 固定顺序输出。availableVersion 仅用于本地选择，不发给模型接口；默认 full 的六个函数定义与改造前一致。
+
 #### flaky mock：确定性故障注入（Phase 1 Part 1）
 
 ```bash
@@ -132,6 +152,8 @@ bash check.sh
 `check.sh` 执行空模块缓存/禁用下载的默认依赖检查、Go 竞态测试、静态检查、构建，以及客户端类型检查、工具自测和回归测试。
 回归测试使用临时工作区、假密钥和本机模拟模型，包含真实 Go 后端与 CLI 的
 “读文件 → 编辑 → 执行测试 → 最终回答”四轮流程，不调用付费模型。
+
+客户端 npm test 由 scripts/test.ts 为每个测试文件启动独立进程，再直接运行 Node 原生测试；保留文件级隔离，同时避开当前 Node 24.19.0 测试运行器的 V8/stdout 混合转发问题。测试失败仍会使统一入口返回非零。相关上游修复见 [Node #64706](https://github.com/nodejs/node/pull/64706)。
 
 #### Phase 2：增量会话、持久化与恢复
 
@@ -237,6 +259,7 @@ MiniCoco/
 │   ├── sessions.go               #   历史、预占、模型调用、回写及成功回放
 │   ├── session_http.go           #   会话列表和恢复元数据
 │   ├── prompt.go                 #   genPrompt：系统提示词 + 工具清单（//go:embed 资源）
+│   ├── tools.go                  #   工具注册、Schema 版本选择、稳定顺序和模式过滤
 │   ├── llm.go                    #   provider 选择 + 流式 + tool_call 解析（openai / mock）
 │   ├── protocol.go               #   SSE 事件类型 / 请求体
 │   ├── store.go / store_files.go #   三存储接口、数据类型和原子文件写入
@@ -251,7 +274,7 @@ MiniCoco/
 │   ├── go.mod                    #   默认 Go 1.22、零第三方模块
 │   ├── go.realdb.mod / .sum      #   真实档 Go 1.26、锁定驱动依赖
 │   ├── prompts/system.txt        #   主系统提示词（编译进二进制）
-│   └── tools/*.json              #   工具 schema（OpenAI function 格式，编译进二进制）
+│   └── tools/*__vN.json          #   带 availableVersion 的工具资源，输出标准 function Schema
 ├── client/                       # ← 真实前端映射（前端：TS，Agent 循环 + 本地工具）
 │   ├── package.json / tsconfig.json
 │   └── src/
@@ -261,6 +284,7 @@ MiniCoco/
 │       ├── executor.ts           #   单轮：发请求 + 消费 SSE
 │       ├── sse.ts                #   SSE 解析
 │       ├── protocol.ts           #   与后端共用的事件类型
+│       ├── toolMode.ts           #   客户端模式与执行范围校验
 │       ├── selftest.ts           #   本地工具离线自测
 │       └── tools/
 │           ├── index.ts          #     createHandler 注册表
@@ -274,8 +298,8 @@ MiniCoco/
 
 - **历史放后端**：服务端从持久化 transcript 读取历史，客户端只提交增量；三个接口分离元数据、正文与协调。默认 JSON/JSONL/进程内实现便于离线运行，可选 SQLite/MongoDB/Redis 档保留同样的轮次和去重语义。
 - **原生 function calling**：直接用模型的 `tools` / `tool_calls`。真实前后端设计 还支持 XML 风格工具协议、prompt cache、ABTest 分流等。
-- **逐步完善实现**：已实现模型请求重试、一次性 JSON 兜底、会话持久化/恢复和可选真实库档；尚未实现上下文压缩算法、tracing、权限审批、memory、subagent / MCP。使用明确的预算和失败状态控制基本边界。
-- **工具集**：只保留 6 个最核心的（read/write/edit/list/grep/run_command）。加工具 = 在 `backend/tools/` 放一个 JSON + 在 `client/src/tools/` 写一个 Handler 并在 `createHandler` 注册。
+- **逐步完善实现**：已实现模型请求重试、一次性 JSON 兜底、会话持久化/恢复、可选真实库档和工具版本/模式控制；尚未实现 XML 工具结果 formatter、自动模型路由、上下文压缩算法、tracing、权限审批、memory、subagent / MCP。使用明确的预算和失败状态控制基本边界。
+- **工具集**：保留 6 个核心工具。新增工具时提供带版本/元数据的 JSON，更新后端 ToolName、固定顺序与模式策略，并在客户端增加 Handler、注册表和模式策略，补齐两端回归；仅放一个 JSON 不会自动开放执行。
 - **语言**：真实后端是 Java；这里用 Go 保持「编译型、单二进制、无框架」的最小形态，前端沿用 TypeScript。
 
 ## 安全说明
