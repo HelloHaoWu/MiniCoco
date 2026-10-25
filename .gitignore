@@ -3,6 +3,10 @@
 !.env.example
 client/node_modules/
 
+# Local session metadata and transcripts (Phase 2 stores)
+/data/
+/backend/data/
+
 # Local-only notes
 /超级额外说明.md
 

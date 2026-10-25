@@ -136,6 +136,23 @@ bash check.sh
 回归测试使用临时工作区、假密钥和本机模拟模型，包含真实 Go 后端与 CLI 的
 “读文件 → 编辑 → 执行测试 → 最终回答”四轮流程，不调用付费模型。
 
+#### Phase 2 Part 1：独立存储层
+
+已提供 `MetaStore`、`TranscriptStore`、`Coordinator` 三接口和默认零第三方依赖实现，**本 Part 尚未接入 HTTP/Agent 循环**。当前 CLI 仍持有内存历史、回传全量 `messages`；运行后端不会自动创建会话文件，尚无 `--resume` 或 `--list`，这些属于 Part 2。
+
+- `NewJSONMetaStore("data")`：在首次修改时原子写入 `data/meta.json`，保存会话元数据、token 累加、压缩检查点和消息点赞。`ListSessions` 只返回指定 user 的记录，空 user 也只匹配空 user，按创建时间倒序、同时间按 ID 排序。
+- `NewJSONLTranscriptStore("data")`：保存 `data/transcripts/<sid>.jsonl`；同一 `roundID` 的整批追加可在重启后去重。预占生成 pending，回写追加同一消息 ID 的 final；重复提交相同 final 不追加，不同 final 报冲突。`Latest` 按首次出现位置恢复顺序、用 final 覆盖 pending，并排除未完成占位及存储元数据；`n=0` 返回空、负数报错。摘要单独写 `<sid>.summary.jsonl`，尚不自动压缩或合并进历史。
+- `NewInprocCoordinator(flags)`：提供非阻塞 TTL 锁、按 key 的固定窗口限流、开关及单机广播空实现。显式 flags 优先于同名环境变量；锁过期后旧 owner 的 unlock 不会释放新 owner 的锁。TTL 是租约，过期不会取消正在运行的代码；限流有固定窗口边界行为。
+
+文件存储面向可信本地目录，每个数据目录只允许一个写入实例；单实例内并发安全，**没有跨进程锁或跨文件事务**。JSONL 保留逻辑追加记录，实际通过重写完整文件并原子替换提交整批变更，适合当前小规模默认档；多实例协调及真实数据库档尚未实现。会话 ID 在拼接路径前校验，消息 ID 包含会话标识，使重启后仍可定位回写文件。`data/` 和 `backend/data/` 已被 Git 忽略，避免提交本地会话内容。
+
+只验证本 Part（在 `backend/` 执行）：
+
+```bash
+go test -race -run 'Test(JSON|Inproc)' -v ./...
+go list -m all  # 默认仅 minicoco，无第三方模块
+```
+
 ### 5）运行结果、取消与资源限制
 
 - `Conversation.run()` 返回 `{status, text, rounds, message?}`，状态包括 `completed`、`failed`、`exhausted`、`cancelled`。CLI 仅为正常完成打印答案，失败或耗尽返回退出码 1，取消返回 130。
@@ -157,6 +174,10 @@ MiniCoco/
 │   ├── prompt.go                 #   genPrompt：系统提示词 + 工具清单（//go:embed 资源）
 │   ├── llm.go                    #   provider 选择 + 流式 + tool_call 解析（openai / mock）
 │   ├── protocol.go               #   SSE 事件类型 / 请求体
+│   ├── store.go / store_files.go #   三存储接口、数据类型和原子文件写入
+│   ├── metastore_json.go         #   JSON 会话元数据
+│   ├── transcript_jsonl.go       #   JSONL 消息、预占/回写和摘要
+│   ├── coord_inproc.go           #   进程内 TTL 锁、固定窗口限流与开关
 │   ├── go.mod
 │   ├── prompts/system.txt        #   主系统提示词（编译进二进制）
 │   └── tools/*.json              #   工具 schema（OpenAI function 格式，编译进二进制）
@@ -180,7 +201,7 @@ MiniCoco/
 
 - **历史放客户端**：这里让 client 持有完整 `messages` 并每轮回传，后端因此**完全无状态**。复杂前后端设计把历史存在 MongoDB，client 只回传新 query + 工具结果。两者「后端按轮组 prompt」的本质一致。
 - **原生 function calling**：直接用模型的 `tools` / `tool_calls`。真实前后端设计 还支持 XML 风格工具协议、prompt cache、ABTest 分流等。
-- **保持最小实现**：暂不引入上下文压缩、自动重试、非流式兜底、数据库、tracing、权限审批、memory、subagent / MCP。使用明确的预算和失败状态控制基本边界。
+- **逐步完善实现**：已实现模型请求重试、一次性 JSON 兜底和独立可测的文件存储接口；当前调用链尚未接入会话持久化、上下文压缩算法、真实数据库、tracing、权限审批、memory、subagent / MCP。使用明确的预算和失败状态控制基本边界。
 - **工具集**：只保留 6 个最核心的（read/write/edit/list/grep/run_command）。加工具 = 在 `backend/tools/` 放一个 JSON + 在 `client/src/tools/` 写一个 Handler 并在 `createHandler` 注册。
 - **语言**：真实后端是 Java；这里用 Go 保持「编译型、单二进制、无框架」的最小形态，前端沿用 TypeScript。
 
