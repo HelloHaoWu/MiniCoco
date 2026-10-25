@@ -3,8 +3,7 @@ package main
 import "encoding/json"
 
 // Wire protocol shared with the TypeScript client (see client/src/protocol.ts).
-// Each SSE `data:` line the backend emits is one Event. This mirrors Coco's
-// CompletionStreamResult chunks.
+// One Event per SSE frame, or the same sequence inside a JSON events array.
 const (
 	EvText      = "text"      // assistant text delta        {type, delta}
 	EvReasoning = "reasoning" // thinking delta              {type, delta}
@@ -38,4 +37,6 @@ type ChatRequest struct {
 	Messages  []map[string]any `json:"messages"`
 	Workspace string           `json:"workspace"`
 	Model     string           `json:"model"`
+	// Absent/null retains the original streaming transport; false buffers events.
+	Stream *bool `json:"stream,omitempty"`
 }

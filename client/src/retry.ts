@@ -1,4 +1,4 @@
-import {runRound, type RoundArgs, type RoundResult} from './executor.ts';
+import {runRound, runRoundNonStreaming, type RoundArgs, type RoundResult} from './executor.ts';
 import {RoundError, abortError} from './roundError.ts';
 import type {Message} from './protocol.ts';
 import {RETRY_POLICY, type RetryPolicy} from './tuning.ts';
@@ -7,6 +7,7 @@ export interface CompressionHook { compress(messages: Message[], reason: 'upstre
 export interface RetryResult extends RoundResult { messages: Message[]; attempts: number; }
 export interface RetryDependencies {
     run?: (args: RoundArgs, signal?: AbortSignal) => Promise<RoundResult>;
+    runNonStreaming?: (args: RoundArgs, signal?: AbortSignal) => Promise<RoundResult>;
     sleep?: (attempt: number, policy: RetryPolicy, signal?: AbortSignal) => Promise<void>;
     onRetry?: (error: RoundError, nextAttempt: number) => void;
 }
@@ -71,6 +72,7 @@ function validCompression(previous: Message[], next: Message[]): boolean {
 export async function runRoundWithRetry(args: RoundArgs, policy: RetryPolicy = RETRY_POLICY, signal?: AbortSignal, hook: CompressionHook = NOOP_COMPRESSION, dependencies: RetryDependencies = {}): Promise<RetryResult> {
     let messages = structuredClone(args.messages), attempts = 0, retries = 0, compressions = 0;
     const run = dependencies.run ?? ((input, currentSignal) => runRound(input.serverUrl, input.messages, input.workspace, input.model, currentSignal, input.options));
+    const fallback = dependencies.runNonStreaming ?? ((input: RoundArgs, currentSignal?: AbortSignal) => runRoundNonStreaming(input.serverUrl, input.messages, input.workspace, input.model, currentSignal, input.options));
     const sleep = dependencies.sleep ?? backoffSleep;
     if (!Number.isSafeInteger(policy.maxRetries) || policy.maxRetries < 0 || !Number.isSafeInteger(policy.maxCompressions) || policy.maxCompressions < 0 || ![policy.baseMs, policy.capMs, policy.jitter].every(value => Number.isFinite(value) && value >= 0)) throw new RoundError('invalid retry policy', 'protocol');
     while (true) {
@@ -93,7 +95,14 @@ export async function runRoundWithRetry(args: RoundArgs, policy: RetryPolicy = R
                     messages = structuredClone(next);
                     continue;
                 }
-                if (retries >= policy.maxRetries) throw error;
+                if (retries >= policy.maxRetries) {
+                    if (signal?.aborted) throw abortError(signal);
+                    attempts++;
+                    process.stderr.write(`\n[fallback] stream retries exhausted; one non-streaming attempt ${attempts}\n`);
+                    const result = await fallback({...args, messages: structuredClone(messages)}, signal);
+                    if (signal?.aborted) throw abortError(signal);
+                    return {...result, messages, attempts};
+                }
                 (dependencies.onRetry ?? ((failure, nextAttempt) => process.stderr.write(`\n[retry] ${failure.code ?? failure.kind}; discarded incomplete round, next attempt ${nextAttempt}\n`)))(error, attempts + 1);
                 await sleep(retries++, policy, signal);
             } catch (failure) {

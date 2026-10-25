@@ -85,8 +85,10 @@ test('fatal errors and exhausted retry budgets stop at their exact limits', asyn
         assert.equal(attempts, 1);
     }
     let attempts = 0;
-    await assert.rejects(() => runRoundWithRetry(args, fast, undefined, undefined, {run: async () => {attempts++;throw new RoundError('network', 'network');}, sleep: async () => {}, onRetry: () => {}}), (error: unknown) => error instanceof RoundError && error.attempts === 3);
+    let fallbacks = 0;
+    await assert.rejects(() => runRoundWithRetry(args, fast, undefined, undefined, {run: async () => {attempts++;throw new RoundError('network', 'network');}, runNonStreaming: async () => {fallbacks++;throw new RoundError('fallback failed', 'network');}, sleep: async () => {}, onRetry: () => {}}), (error: unknown) => error instanceof RoundError && error.attempts === 4);
     assert.equal(attempts, 3);
+    assert.equal(fallbacks, 1);
 });
 
 test('abort during retry backoff immediately ends the round without another request', async () => {

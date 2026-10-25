@@ -1,7 +1,7 @@
 import {parseSSE} from './sse.ts';
 import {EV, FINISH, type Event, type Message, type ToolCall} from './protocol.ts';
 import {RoundError, abortError} from './roundError.ts';
-import {STREAM_TIMEOUT_MS} from './tuning.ts';
+import {STREAM_TIMEOUT_MS, NONSTREAM_TIMEOUT_MS} from './tuning.ts';
 export {RoundError} from './roundError.ts';
 
 export interface RoundResult { assistant: Message; toolCalls: ToolCall[]; finish: string; }
@@ -15,6 +15,7 @@ export async function consumeEvents(source: Iterable<Event> | AsyncIterable<Even
     let finish = '';
     for await (const event of source) {
         if (!event || typeof event !== 'object' || Array.isArray(event) || typeof event.type !== 'string' || finish) throw new RoundError('invalid event or data after done', 'protocol');
+        if (Buffer.byteLength(JSON.stringify(event)) > 1024 * 1024) throw new RoundError('event exceeds 1 MiB', 'protocol');
         if (event.type === EV.TEXT || event.type === EV.REASONING) {
             if (typeof event.delta !== 'string') throw new RoundError('invalid text delta', 'protocol');
             if (event.type === EV.TEXT) text.push(event.delta);
@@ -40,8 +41,16 @@ export async function consumeEvents(source: Iterable<Event> | AsyncIterable<Even
 }
 
 export async function runRound(serverUrl: string, messages: Message[], workspace: string, model: string, signal?: AbortSignal, options: RoundOptions = {}): Promise<RoundResult> {
+    return executeRound(serverUrl, messages, workspace, model, true, signal, options);
+}
+
+export async function runRoundNonStreaming(serverUrl: string, messages: Message[], workspace: string, model: string, signal?: AbortSignal, options: RoundOptions = {}): Promise<RoundResult> {
+    return executeRound(serverUrl, messages, workspace, model, false, signal, options);
+}
+
+async function executeRound(serverUrl: string, messages: Message[], workspace: string, model: string, stream: boolean, signal?: AbortSignal, options: RoundOptions = {}): Promise<RoundResult> {
     if (signal?.aborted) throw abortError(signal);
-    const timeout = AbortSignal.timeout(options.timeoutMs ?? STREAM_TIMEOUT_MS);
+    const timeout = AbortSignal.timeout(options.timeoutMs ?? (stream ? STREAM_TIMEOUT_MS : NONSTREAM_TIMEOUT_MS));
     let response: Response | undefined;
     let fetching = true, printedReasoning = false;
     const render = options.onEvent ?? ((event: Event): void => {
@@ -52,12 +61,13 @@ export async function runRound(serverUrl: string, messages: Message[], workspace
         try { const url = new URL(serverUrl); if (!['http:', 'https:'].includes(url.protocol)) throw new Error('unsupported protocol'); }
         catch (cause) { throw new RoundError('server must be a valid HTTP(S) URL', 'protocol', {cause}); }
         response = await fetch(serverUrl.replace(/\/$/, '') + '/chat/stream', {
-            method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({messages, workspace, model}),
+            method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({messages, workspace, model, stream}),
             signal: signal ? AbortSignal.any([signal, timeout]) : timeout,
         });
         fetching = false;
         if (!response.ok) throw new RoundError(`backend HTTP ${response.status}`, 'http', {httpStatus: response.status});
-        if (!response.headers.get('content-type')?.toLowerCase().startsWith('text/event-stream') || !response.body) throw new RoundError('backend did not return an SSE stream', 'protocol');
+        const expectedType = stream ? 'text/event-stream' : 'application/json';
+        if (!response.headers.get('content-type')?.toLowerCase().startsWith(expectedType) || !response.body) throw new RoundError(`backend did not return ${expectedType}`, 'protocol');
         const reader = response.body.getReader();
         async function* chunks(): AsyncGenerator<Uint8Array> {
             try {
@@ -76,6 +86,21 @@ export async function runRound(serverUrl: string, messages: Message[], workspace
                 render(event);
                 if (event.type === EV.DONE) return;
             }
+        }
+        if (!stream) {
+            const buffers: Uint8Array[] = [];let bytes = 0;
+            for await (const chunk of chunks()) {
+                bytes += chunk.byteLength;
+                if (bytes > 4 * 1024 * 1024) throw new RoundError('JSON response exceeds 4 MiB', 'protocol');
+                buffers.push(chunk);
+            }
+            let envelope: unknown;
+            try { envelope = JSON.parse(new TextDecoder('utf-8', {fatal: true}).decode(Buffer.concat(buffers))); }
+            catch (cause) { throw new RoundError('invalid JSON response', 'protocol', {cause}); }
+            if (!envelope || typeof envelope !== 'object' || !('events' in envelope) || !Array.isArray(envelope.events)) throw new RoundError('JSON response must contain an events array', 'protocol');
+            const result = await consumeEvents(envelope.events as Event[]);
+            for (const event of envelope.events as Event[]) render(event);
+            return result;
         }
         return await consumeEvents(events());
     } catch (cause) {

@@ -83,6 +83,12 @@ func handleChatStream(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
+	ctx, cancel := context.WithCancel(r.Context())
+	defer cancel()
+	if req.Stream != nil && !*req.Stream {
+		writeBufferedCompletion(ctx, w, req)
+		return
+	}
 	flusher, ok := w.(http.Flusher)
 	if !ok {
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "streaming unsupported"})
@@ -93,8 +99,6 @@ func handleChatStream(w http.ResponseWriter, r *http.Request) {
 	h.Set("Cache-Control", "no-cache")
 	h.Set("X-Accel-Buffering", "no")
 	w.WriteHeader(http.StatusOK)
-	ctx, cancel := context.WithCancel(r.Context())
-	defer cancel()
 
 	emit := func(ev Event) {
 		data, err := json.Marshal(ev)

@@ -10,7 +10,8 @@ import {fileURLToPath} from 'node:url';
 import {HandlerContext, createHandler, ToolError} from './tools/index.ts';
 import {MAX_FILE_BYTES, MAX_OUTPUT_BYTES, boundedOutput} from './tools/base.ts';
 import {Conversation, MAX_HISTORY_BYTES} from './conversation.ts';
-import {runRound} from './executor.ts';
+import {runRound, runRoundNonStreaming} from './executor.ts';
+import {RETRY_POLICY} from './tuning.ts';
 import {parseSSE} from './sse.ts';
 import type {Event, Message} from './protocol.ts';
 
@@ -247,5 +248,31 @@ test('Go flaky backend and real CLI recover with default cancellable backoff', {
         assert.equal(result.code, 0, result.stderr);assert.match(result.stdout, /Done\. I inspected/);
         assert.equal(result.stderr.match(/\[retry\]/g)?.length, 2);
         assert.equal(result.stdout.match(/→ list_dir/g)?.length, 1);
+    } finally {child.kill('SIGTERM');await exit;}
+}));
+
+test('Go flaky backend recovers through one real JSON fallback and executes a tool once', {timeout: 30_000}, () => fixture(async (ws, ctx, temp) => {
+    const binary = path.join(temp, 'backend');
+    const build = spawnSync('go', ['build', '-o', binary, '.'], {cwd: path.join(project, 'backend'), encoding: 'utf8'});
+    assert.equal(build.status, 0, build.stderr);
+    const reservation = http.createServer();reservation.listen(0, '127.0.0.1');await once(reservation, 'listening');
+    const port = (reservation.address() as import('node:net').AddressInfo).port;await new Promise<void>(resolve => reservation.close(() => resolve()));
+    const child = spawn(binary, [], {cwd: temp, env: {...process.env, LLM_PROVIDER: 'mock', LLM_API_KEY: '', LLM_MOCK_MODE: 'flaky', LLM_MOCK_FLAKY_FAILS: '2', MINICOCO_HOST: '127.0.0.1', MINICOCO_PORT: String(port)}, stdio: 'ignore'});
+    const exit = once(child, 'exit');let fallbacks = 0;
+    try {
+        let ready = false;
+        for (let i = 0; i < 100; i++) {
+            try {if ((await fetch(`http://127.0.0.1:${port}/health`)).ok) {ready = true;break;}} catch {}
+            await new Promise(resolve => setTimeout(resolve, 20));
+        }
+        assert(ready);
+        const convo = new Conversation(`http://127.0.0.1:${port}`, ws, '', 25, {
+            retryPolicy: {...RETRY_POLICY, maxRetries: 1, baseMs: 0, capMs: 0, jitter: 0},
+            retryDependencies: {onRetry: () => {}, runNonStreaming: async (input, signal) => {
+                fallbacks++;return runRoundNonStreaming(input.serverUrl, input.messages, input.workspace, input.model, signal);
+            }},
+        });
+        const outcome = await convo.run('inspect workspace');assert.equal(outcome.status, 'completed', outcome.message);
+        assert.equal(fallbacks, 1);assert.equal(convo.messages.filter(message => message.role === 'tool').length, 1);assert.match(outcome.text, /Done\. I inspected/);
     } finally {child.kill('SIGTERM');await exit;}
 }));
