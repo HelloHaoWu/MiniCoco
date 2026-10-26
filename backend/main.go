@@ -56,7 +56,8 @@ func main() {
 
 	route, _ := routeFor("")
 	route, _ = effectiveRoute(route)
-	fmt.Printf("[MiniCoco backend] http://%s  (provider=%s, model=%s, family=%s)\n", addr, route.Provider, route.Name, route.Family)
+	loopKey, _ := selectedLoop()
+	fmt.Printf("[MiniCoco backend] http://%s  (provider=%s, model=%s, family=%s, loop=%s)\n", addr, route.Provider, route.Name, route.Family, loopKey)
 	fmt.Println("  POST /chat/stream   GET /health   GET /sessions   GET /sessions/<id>")
 	server := &http.Server{Addr: addr, ReadHeaderTimeout: 5 * time.Second, ReadTimeout: 15 * time.Second, IdleTimeout: 60 * time.Second}
 	if err := server.ListenAndServe(); err != nil {
@@ -73,8 +74,9 @@ func handleHealth(w http.ResponseWriter, r *http.Request) {
 		writeSessionError(w, err)
 		return
 	}
+	loopKey, _ := selectedLoop()
 	writeJSON(w, http.StatusOK, map[string]string{
-		"status": "ok", "provider": route.Provider, "model": route.Name,
+		"status": "ok", "provider": route.Provider, "model": route.Name, "loop_impl": loopKey,
 	})
 }
 

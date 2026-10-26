@@ -27,6 +27,8 @@ func genPrompt(history []map[string]any, workspace string, mode Mode, route Mode
 	if err != nil {
 		return nil, nil, completionFailure(codeConfig, false, "unsupported prompt family", nil)
 	}
+	// Keep this system/tools pair independent of per-request data. Append the
+	// environment and chronological history without rewriting their prefix.
 	messages := make([]map[string]any, 0, len(history)+2)
 	messages = append(messages, map[string]any{"role": "system", "content": string(prompt)})
 	if workspace != "" {

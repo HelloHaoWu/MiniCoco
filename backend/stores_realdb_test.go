@@ -577,3 +577,46 @@ func TestRealXMLToolResultPersistence(t *testing.T) {
 		t.Fatal("real XML replay duplicated usage/messages")
 	}
 }
+
+func TestRealLoopDispatchAndCommittedReplay(t *testing.T) {
+	open := realContractFactory(t)
+	stores := open()
+	defer func() { stores.close() }()
+	previous := activeSessions
+	activeSessions = &sessionService{meta: stores.meta, transcript: stores.transcript, coord: stores.coord}
+	defer func() { activeSessions = previous }()
+	t.Setenv("LLM_PROVIDER", "mock")
+	t.Setenv("LOOP_IMPL", "v1")
+	preserveMockBudget(t)
+	response, events := deltaResponse(t, map[string]any{"roundId": "real-loop-first", "query": "inspect", "workspace": "/tmp", "stream": true})
+	requireRoundFinish(t, response, events, FinishToolCalls)
+	sid := response.Header().Get("X-Session-Id")
+	var calls atomic.Int32
+	registerTestLoop(t, "v2", func(ctx context.Context, req ChatRequest, emit func(Event)) error {
+		calls.Add(1)
+		return processRequestV1(ctx, req, emit)
+	})
+	t.Setenv("LOOP_IMPL", "v2")
+	request := map[string]any{"sessionId": sid, "roundId": "real-loop-result", "workspace": "/tmp", "stream": false, "toolUseResults": []ToolUseResult{{ID: "call_mock_1", Name: "list_dir", Output: "listing"}}}
+	response, original := deltaResponse(t, request)
+	requireRoundFinish(t, response, original, FinishStop)
+	stores.close()
+	stores = open()
+	activeSessions = &sessionService{meta: stores.meta, transcript: stores.transcript, coord: stores.coord}
+	t.Setenv("LLM_PROVIDER", "unknown") // Successful rounds must not call a model.
+	response, replay := deltaResponse(t, request)
+	requireRoundFinish(t, response, replay, FinishStop)
+	before, _ := json.Marshal(original)
+	after, _ := json.Marshal(replay)
+	if calls.Load() != 2 || !bytes.Equal(before, after) {
+		t.Fatal("real stores lost dispatch or durable events")
+	}
+	history, err := stores.transcript.Latest(context.Background(), sid, 10)
+	if err != nil || len(history) != 4 {
+		t.Fatal("implementation switch/reopen duplicated transcript", err)
+	}
+	session, err := stores.meta.GetSession(context.Background(), sid)
+	if err != nil || session.TotalTokens != 4 || session.MessageCount != 4 {
+		t.Fatal("implementation switch/replay duplicated usage", err)
+	}
+}

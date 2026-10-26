@@ -11,6 +11,7 @@
 - 工具增加/升级需使用 name__vN.json 与 availableVersion，更新后端注册顺序、模式策略及客户端 Handler/策略。模式必须贯穿请求、重试和执行；完整批次检查在任何本地副作用之前完成。同轮不得变更模式，默认 full 保留旧轮次指纹。模式不是鉴权或 OS 沙箱。
 - 工具结果先校验完整身份再按请求顺序格式化并落库。Native 保留旧字段/错误前缀；XML 必须转义文本并限制标签名称，按转义后的 Go JSON 最坏体积预留预算。已持久化结果的会话不得混用格式；默认 Native 指纹保持兼容。完整 prompt 调试默认关闭，仅在显式开关下输出本地 stderr，日志不得提交。
 - 模型路由集中在 models.json / models.go，提示词、formatter 与传输共用单轮快照。修改路由须同步模型能力/提示词测试和配置迁移说明；maxTokens 只预留上下文预算，不得误用作输出 max_tokens。未知模型在创建会话前拒绝，成功轮回放不调用供应商。模型规格须查官方资料，项目配置与实际供应商能力分开描述。
+- 新单轮实现须通过 registerLoop 注册，保留 context 取消、固定 roundId 幂等、完整批次持久化后再暴露及统一失败结束边界；SSE/JSON 共用分流。空/未知 LOOP_IMPL 回退 v1，未注册的 v2 不得宣称可用。相同 family/mode/Schema 的 system/tools 须与工作区和历史无关，追加消息不改已有前缀；诊断 hash/模拟缓存不能当作真实命中或收益证据。
 - 每个 Part 达到对应行为验收要求后才标记完成；执行统一检查，区分历史验证与本次新运行结果。真实库验收使用 check_realdb.sh 并显式指定测试服务；缺少服务的 skip 不算验收通过。
 - 在本工作区，每完成一个 Part 并通过验收，检查更新两层 AGENTS、完成上层 ChangeLog 及索引后，自动提交该 Part 的相关代码和仓库内文档并推送 GitHub 一次，用户已授权，无需逐次询问。提交前检查 diff/暂存范围，只提交相关改动，核实目标分支，不强推、不自动合并 PR。如实记录提交号及推送结果。
 - 上层 AgentDocs/、ChangeLogs/、AGENTS.md 位于本仓库外，推送本仓库不会上传它们，不擅自改变仓库边界。独立克隆缺少阶段资料时，不根据摘要补造设计或验收结果。
@@ -19,6 +20,7 @@
 
 - backend/：Go 持久化单轮请求服务。main.go 接收 HTTP 请求，agentloop.go 编排单轮，llm.go 调用模型；errors.go 分类失败，mock.go 提供确定性故障预算，transport.go 收集有界 JSON 事件。prompts/ 和 tools/ 编译嵌入提示词及六个工具 Schema。
 - backend/tools.go：ToolName 注册、固定 read/list/grep/write/edit/run_command 顺序、兼容最高 Schema 版本与模式过滤；tools/*__vN.json 含最低 Harness 版本 availableVersion，当前内部版本 1，元数据不发给供应商。prompt.go 使用请求模式构建清单，启动时检查全部资源。
+- backend/loop_registry.go：LoopImpl、registerLoop、并发安全选择、LOOP_IMPL 与未知回退；v1 委托现有持久化服务。agentloop.go 的共享入口贯通 SSE/JSON；main.go 启动日志和 health.loop_impl 显示实际选择。loop_registry_test.go 验证分流/取消/回放/配置，prompt_cache_test.go 验证静态 hash、上游字节、历史追加和模拟缓存用量。
 - backend/models.go / models.json：内嵌路由表、完整外部替代表、严格配置校验与单轮快照；llm.go 使用路由 provider/baseURL/temperature/thinking。prompts/system_openai.txt 与 system_claude.txt 按 family 选择；工作区仅注入首条 user 环境消息，不写 transcript。
 - backend/toolresult.go：Formatter、NativeFormatter、XmlFormatter、完整批次身份校验、请求顺序、已存格式识别及结果预算；prompt.go 在 MINICOCO_DEBUG_PROMPT=1 时输出完整 messages。toolresult_test.go、client/src/toolresult.test.ts 和真实档专项覆盖两轨落库/恢复/回放。
 - backend/sessions.go：稳定首轮会话、已提交历史、输入/预占、模型调用、final 和元数据回写、成功事件回放；session_http.go 提供列表和恢复元数据。
@@ -41,6 +43,8 @@ mode 可选，省略/空串等价 full（六个工具）；readonly 仅 read_fil
 
 此处仍只实现结果呈现，未实现 XML 工具调用生成/解析。MINICOCO_DEBUG_PROMPT=1 显式输出完整 messages，可能含私密代码/用户文本，默认关闭。system/tools 在相同 family/mode 下与 workspace 无关，环境消息在 system 之后、历史之前；不表示已验证供应商缓存命中。会话元数据保存首轮模型，显式 --model 只覆盖本次调用，恢复覆盖需再次传入。
 
+LOOP_IMPL 默认/空为 v1，未注册键回退 v1；环境和 .env 支持，环境优先。生产只注册 v1，测试临时注册 v2；无压缩版、用户分桶或 HTTP 注册接口。注册拒绝空/重复/空实现，读写锁保护；分流键不改变协议或旧轮次指纹，pending 重试保持实现/路由配置稳定，不表示自动数据迁移。缓存诊断 hash=SHA256(system_text+tools_json)，非完整 HTTP 请求或供应商 cache key。相同 family/mode/Schema 下，工具 JSON 字节、工作区隔离和历史前缀追加已验收；改 family/mode/Schema 可使 hash 改变。cacheHandle、命中指标持久化和真实命中率/延迟/费用尚未实现或验证。
+
 默认文件档 data/ 相对后端 cwd（启动脚本为 backend/data/），MINICOCO_DATA_DIR 可设绝对路径，每目录仅一个写入实例。JSONL 整文件原子替换，协调器只在进程内生效。部署须持久化数据目录。
 
 真实档 SQLite 保存 meta.sqlite，WAL 和事务保障轮次账本/用量原子更新；Mongo 每轮一个原子文档，唯一 (sessionId,roundId)，保存输入、pending/final、事件、usage 和顺序；正文 JSON 字节保留字段与整数精度。auto_llm_message / auto_llm_summary / auto_llm_sequence 分别保存轮次、摘要和顺序。两库没有跨库事务，仍以 transcript final 恢复元数据。两档无自动数据迁移。
@@ -53,15 +57,15 @@ Redis 提供 TTL 锁、Lua CAS 解锁、固定窗口限流和 feature_toggle 开
 
 ## 阶段与验证状态
 
-Phase 1、Phase 2、Phase 3 各 Part 及 Phase 4 Part 1 已实现并验收。本次前置已推送基线 7afd2b5；发布提交与推送结果见上层 ChangeLog 2026-10-26-002。Phase 4 Part 2、真实压缩、XML 工具调用解析、原生 Anthropic 协议、跨机器控制面及跨进程工具日志尚未实现。
+Phase 1—4 的全部现有 Part 已实现并验收（Phase 2 Part 3 为可选真实库档）。本次 Phase 4 Part 2 前置已推送基线 bc7d3ae；发布提交和推送结果见上层 ChangeLog 2026-10-26-003。当前仅收到 Phase 1—4 共 14 个资料文件，Phase 5/6 详细设计尚未收到。真实压缩、XML 工具调用解析、原生 Anthropic 协议、跨机器控制面及跨进程工具日志尚未实现。
 
 2026-10-26 本次完整验收：
 
-- 默认 check.sh 通过：空模块缓存/禁用下载/无 cgo 构建、模块与非标准库列表仅 minicoco；Go -race、vet、构建；TS 类型检查、10 项工具自测、50 项客户端测试（6 个独立文件全部成功）。默认后端覆盖率 84.3%。
-- 新增 5 项 Go 顶层专项（含子用例）：路由字段/默认模型/离线覆盖/路由 mock 故障预算；未知模型 SSE/JSON 前置 400、不建会话；外部表和字段校验/限长/错误脱敏；双 family 与 workspace 注入；自定义端点、temperature/thinking、XML 回填、持久化与成功回放、单轮快照。Phase 3 格式专项迁移到路由字段，错误、重试、模式与工具不重放回归继续通过。
-- 客户端真实 Go/CLI 专项覆盖 mock、mock-xml、mock-claude 三路由的重启恢复/列表、保存模型元数据，以及未知模型只请求一次、不退避、不建会话。既有恢复测试同步环境 user 消息位置。
-- check_realdb.sh 全量 -race、vet、无 cgo 构建及驱动包含检查通过，覆盖率 82.8%；真实 Mongo XML 入库、重开、成功回放及共同接口/并发/跨进程协调继续通过。未改存储接口或驱动依赖。
-- 仅使用临时目录、独立端口 MongoDB 8.0.16/Redis 8.10.2、随机数据库/前缀、本机模拟模型与假密钥；临时数据库进程已停止。未调用真实模型 API，未验证缓存命中收益。
+- 默认 check.sh 通过：空模块缓存/禁用下载/无 cgo、模块与非标准库列表仅 minicoco；Go -race/vet/构建、TS 类型检查、10 项工具自测、51 项客户端测试（6 个独立文件全部成功）。默认后端覆盖率 84.5%。
+- 新增 6 项默认 Go 顶层专项（含子用例）：4 项注册/默认回退/假 v2/双传输/错误/取消/并发查找/.env/health；2 项前缀矩阵与上游请求，覆盖双 family、三 mode、Native/XML、跨 workspace/轮次、Schema 改变导致 hash 改变、历史追加、合成缓存 usage 及成功回放。未调用真实供应商。
+- 新增客户端真实 Go/CLI 专项：LOOP_IMPL 默认、v1、未知键均闭环退出 0，health 显示有效 v1、正文和用量正确；既有路由、格式、可靠性、恢复、模式与工具不重放回归继续通过。
+- check_realdb.sh 全量 -race/vet/无 cgo/驱动包含检查通过，覆盖率 82.9%；新增 v1→假 v2、SQLite/Mongo 重开、失效 provider 下成功回放，不重复正文和用量；共同接口、并发与跨进程协调继续通过。未改存储协议或驱动清单。
+- 仅使用临时目录、独立端口 MongoDB 8.0.16/Redis 8.10.2、随机数据库/前缀、本机模拟模型和假密钥；临时数据库已停止。未调用真实模型 API，未验证真实缓存收益。cacheHandle 为文档可选项，本次未实现。
 
 从仓库根目录执行，默认要求 Go ≥ 1.22、Node ≥ 24：
 

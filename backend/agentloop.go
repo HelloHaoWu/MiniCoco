@@ -29,7 +29,8 @@ func processModelContext(ctx context.Context, messages []map[string]any, workspa
 }
 
 func processRequestContext(ctx context.Context, req ChatRequest, emit func(Event)) {
-	if err := activeSessions.process(ctx, req, emit); err != nil {
+	// Both HTTP transports enter here and select exactly one implementation.
+	if err := pickLoop()(ctx, req, emit); err != nil {
 		emit(failureEvent(err))
 		emit(Event{Type: EvDone, FinishReason: "error"})
 	}

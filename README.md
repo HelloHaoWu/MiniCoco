@@ -122,6 +122,30 @@ LLM_MODEL=mock-claude bash run_backend.sh
 MINICOCO_MODELS_FILE=/absolute/path/models.json LLM_MODEL=my-model LLM_BASE_URL= bash run_backend.sh
 ```
 
+#### 实现注册、分流与缓存前缀（Phase 4 Part 2）
+
+`backend/loop_registry.go` 定义统一的 `LoopImpl(context.Context, ChatRequest, emit) error`，保留 HTTP 请求的取消和超时。默认只注册 `v1`，直接进入现有持久化单轮服务；SSE 和 JSON 都在共享入口 `processRequestContext` 中选择一次实现，错误仍走同一分类和结束事件。`LOOP_IMPL` 可通过环境或本地 .env 设置，已导出环境优先；空值/省略选择 v1，未注册名称也按阶段设计回退到 v1。启动日志及 `GET /health` 的 `loop_impl` 显示实际选择，便于发现回退。
+
+`registerLoop` 为后端代码扩展点，拒绝空名、空实现和重复注册，读写锁保护注册与选择。后续压缩版可注册为 v2，再由环境切换；**当前生产二进制未注册 v2、没有压缩实现或按用户哈希分桶**，测试里的 v2 是临时假实现。新增实现必须遵守同一单轮持久化/幂等、取消和完整工具批次提交边界；分流键不进入客户端协议或轮次指纹，既有 v1 成功轮保持回放兼容。实现切换不应改变已经提交的轮次；pending 重试期间保持实现和路由配置稳定，不能将这个钩子理解为自动跨版本数据迁移。
+
+```bash
+LOOP_IMPL=v1 LLM_PROVIDER=mock bash run_backend.sh
+# 默认生产构建中，下行尚未注册 v2，会回退到 v1；health 显示 loop_impl=v1
+LOOP_IMPL=v2 LLM_PROVIDER=mock bash run_backend.sh
+```
+
+本次缓存验收证明：相同 family、mode 和工具 Schema 下，`hash(system_text + tools_json)` 在不同工作区、不同 query/轮次、SSE/JSON 返回方式下相同；工具 JSON 使用实际上游请求中的序列化字节。工作区差异只进入首条 user 环境消息，追加轮次保留已有 messages 前缀。切换 family/mode 或改工具 Schema 会使静态段改变并产生不同诊断 hash，这是预期行为。
+
+这个 hash 只用于本地测试诊断，不是供应商 cache key，也不表示整个 HTTP JSON 请求字节相同。单测和本机模拟上游均已验证前缀；模拟命中/未命中 usage 不影响总 token 聚合，成功轮回放不再请求上游或重复记账。**未调用真实模型 API，未测真实缓存命中率、延迟或费用**，也未实现显式 cacheHandle 透传或缓存命中指标落库。已有持久化轮次回放与供应商 prompt cache 是两种独立行为。
+
+可单独复核本 Part 的 Go 专项（不需要真实模型密钥）：
+
+```bash
+cd backend
+LOOP_IMPL=v1 MINICOCO_MODEL_IS_FUNCTION_CALL= MINICOCO_MODELS_FILE= MINICOCO_DEBUG_PROMPT=0 \
+  go test -race -run 'TestLoop|TestPromptCache' -v .
+```
+
 #### flaky mock：确定性故障注入（Phase 1 Part 1）
 
 ```bash
@@ -335,6 +359,9 @@ MiniCoco/
 │   ├── store_contract_test.go    #   两档复用的接口验收
 │   ├── go.mod                    #   默认 Go 1.22、零第三方模块
 │   ├── go.realdb.mod / .sum      #   真实档 Go 1.26、锁定驱动依赖
+│   ├── loop_registry.go          #   同形状单轮实现注册、LOOP_IMPL 分流与 v1 回退
+│   ├── loop_registry_test.go     #   双传输分流、取消、回放与配置验收
+│   ├── prompt_cache_test.go      #   静态段 hash、上游字节、追加历史与模拟缓存验收
 │   ├── models.go / models.json   #   模型路由、能力与配置校验（内嵌默认表）
 │   ├── prompts/system_*.txt      #   openai / claude 模型族提示词（编译嵌入）
 │   └── tools/*__vN.json          #   带 availableVersion 的工具资源，输出标准 function Schema
@@ -361,7 +388,7 @@ MiniCoco/
 
 - **历史放后端**：服务端从持久化 transcript 读取历史，客户端只提交增量；三个接口分离元数据、正文与协调。默认 JSON/JSONL/进程内实现便于离线运行，可选 SQLite/MongoDB/Redis 档保留同样的轮次和去重语义。
 - **原生 function calling**：直接用模型的 `tools` / `tool_calls`。真实前后端设计 还支持 XML 风格工具协议、prompt cache、ABTest 分流等。
-- **逐步完善实现**：已实现模型请求重试、一次性 JSON 兜底、会话持久化/恢复、可选真实库档、工具版本/模式、Native/XML 结果回填和按模型名路由/模型族提示词；尚未实现 XML 工具调用解析、按任务自动选模、上下文压缩算法、tracing、权限审批、memory、subagent / MCP。使用明确的预算和失败状态控制基本边界。
+- **逐步完善实现**：已实现模型请求重试、一次性 JSON 兜底、会话持久化/恢复、可选真实库档、工具版本/模式、Native/XML 结果回填、按模型名路由/模型族提示词、单轮实现注册与静态前缀验收；尚未实现 XML 工具调用解析、按任务自动选模、上下文压缩算法、tracing、权限审批、memory、subagent / MCP。使用明确的预算和失败状态控制基本边界。
 - **工具集**：保留 6 个核心工具。新增工具时提供带版本/元数据的 JSON，更新后端 ToolName、固定顺序与模式策略，并在客户端增加 Handler、注册表和模式策略，补齐两端回归；仅放一个 JSON 不会自动开放执行。
 - **语言**：真实后端是 Java；这里用 Go 保持「编译型、单二进制、无框架」的最小形态，前端沿用 TypeScript。
 
