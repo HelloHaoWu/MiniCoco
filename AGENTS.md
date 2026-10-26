@@ -100,10 +100,18 @@ Phase 6 Part 1：trace.go 定义无正文/参数的 TraceRecord；X-Trace-Id=ses
 
 本次默认 check.sh 与真实 check_realdb.sh 均通过：Go -race/vet/构建、默认零依赖、TS 类型检查、10 项工具自测和 53 项客户端测试；真实档覆盖率 83.5%。临时服务继续供下一 Part 使用。阶段实现及发布记录见 ChangeLog 006，下一步 Phase 6 Part 2；Phase 7—9 尚未实施。
 
-## 最新进度：Phase 6 完成（2026-10-26）
+## Phase 6 历史验收（2026-10-26）
 
 Phase 6 Part 2：jsonl_sink.go 提供容量 1024 的共享异步 JSONL 队列，满时丢最旧、写失败隔离，SIGINT/SIGTERM 关闭 HTTP 后有界 flush。trace 写入 backend/data/logs/trace-<sid>.jsonl（随 MINICOCO_DATA_DIR）；trace_http.go 提供 GET /trace/<sid>?round=N 和 /health.recentSessions 最近 10 会话轮数/账本用量/日志错误数；client/src/trace.ts 提供 trace <sid> [--round N]。普通 usage 仍只由 CommitRoundUsage 去重；摘要以 summary_request/summary_committed 记录独立账本用量。回放只记 replay，不重复计量。
 
 本次 check.sh 与 check_realdb.sh 全通过：默认零依赖、Go -race/vet/构建、TS 类型检查、10 工具自测、54 客户端测试；默认覆盖率 83.5%，真实档 82.3%。专项覆盖三轮/回放/用量/health/过滤读取、真实写盘失败不影响 SSE、阻塞 writer 下丢最旧、CLI 时间线。未调用真实模型 API。
 
 日志为 best effort，队列丢弃/磁盘错误/崩溃可能缺记录；错误数来自日志且异步可延迟，不是交易账本。服务端时间线文件限 8 MiB，客户端响应限 4 MiB，超限明确报错，尚无轮转。日志不含正文/参数，禁止用 trace 再 BumpUsage。Part 1 已推送 f7a71ea，Part 2 发布见 ChangeLog 007；下一步 Phase 7 Part 1，Phase 7—9 尚未实现。
+
+## 最新进度：Phase 7 Part 1（2026-10-26）
+
+Phase 7 Part 1：write_file/edit_file/run_command 标记 requiresApproval；Conversation 执行前审批，拒绝作为 ERROR: denied by user 回灌并继续循环。CLI --yes 显式放行，TTY 交互 y/N，非 TTY 默认拒绝；readonly 工具免审批，模式禁用仍优先。取消贯穿审批。audit.ts 通过有界异步队列发送摘要记录至 POST /audit，后端复用 Phase 6 JSONL sink 写 data/audit.jsonl，保存 session/trace/tool/argsDigest/approved/status/ms，拒绝正文参数字段。CLI 退出有界 flush。
+
+check.sh 和 check_realdb.sh 均通过：默认零依赖、Go -race/vet/构建、TS 类型检查、10 工具自测、57 客户端测试（7 文件）；默认覆盖率 83.4%，真实档 82.2%。新增拒绝后继续/只读免审批/--yes/管道默认拒绝/取消/审计摘要测试，后端共享 sink 和拒绝正文参数测试。真实 PTY 手动验收：出现 y/N，输入 n 后模型继续、退出 0、未生成目标文件。
+
+审批不是 OS 沙箱；直接调用底层 Handler 的程序需自行提供审批入口。审计是本地客户端报告、best effort，不能作为安全证明或工具去重日志。--yes 表示本次调用显式批准危险工具。下一步 Part 2 进程资源保护和权限提示词；Phase 8—9 未实施。Phase 6 Part 2 已推送 f3feace，本 Part 发布见 ChangeLog 008。

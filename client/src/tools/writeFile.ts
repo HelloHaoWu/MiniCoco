@@ -2,6 +2,7 @@ import * as fs from 'node:fs';
 import {Handler, stringArg, type ToolArgs} from './base.ts';
 
 export class WriteFile extends Handler {
+    requiresApproval = true;
     name = 'write_file';
     protected run(args: ToolArgs): string {
         const file = this.ctx.resolve(stringArg(args, 'target_file'));

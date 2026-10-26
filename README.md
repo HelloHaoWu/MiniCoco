@@ -433,3 +433,9 @@ LOOP_IMPL=v2 LLM_PROVIDER=mock bash run_backend.sh
 ```
 
 `GET /health` 的 `recentSessions` 包含最近 10 会话的成功轮数、去重账本 token 和日志中的失败尝试数。日志异步且允许丢失，错误数可延迟；SIGINT/SIGTERM 尝试有界 flush，强杀不保证落盘。成功回放不会重复累计 usage。服务端读取单个 trace 文件限制 8 MiB，CLI 响应限制 4 MiB；当前不自动轮转。
+
+### 工具审批与审计
+
+交互终端执行 write_file / edit_file / run_command 前会询问 `[y/N]`。非交互管道默认拒绝这些工具；需要自动执行时显式传 `--yes`。只读工具免审批，`--mode readonly/safe` 仍限制工具范围。拒绝作为工具错误回给模型，循环继续。
+
+审计由本地客户端异步发送到后端 `data/audit.jsonl`，只记录参数摘要及 approved/status，不记录参数正文。审计可能因队列满、网络或磁盘失败丢失，不是权限证明或重放日志。

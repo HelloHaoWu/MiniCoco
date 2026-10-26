@@ -17,7 +17,7 @@ const successful: Event[] = [{type: 'reasoning', delta: 'thinking'}, {type: 'tex
 const result: RoundResult = {assistant: {role: 'assistant', content: 'ok'}, toolCalls: [], finish: 'stop'};
 
 async function server(handler: http.RequestListener, run: (url: string) => Promise<void>): Promise<void> {
-    const instance = http.createServer((req, res) => {res.setHeader('X-Session-Id', 's_test');handler(req, res);});instance.listen(0, '127.0.0.1');await once(instance, 'listening');
+    const instance = http.createServer((req, res) => {if (req.url === '/audit') {res.writeHead(202);res.end('{}');return;}res.setHeader('X-Session-Id', 's_test');handler(req, res);});instance.listen(0, '127.0.0.1');await once(instance, 'listening');
     try {await run(`http://127.0.0.1:${(instance.address() as import('node:net').AddressInfo).port}`);}
     finally {instance.closeAllConnections();await new Promise<void>(resolve => instance.close(() => resolve()));}
 }
@@ -119,7 +119,7 @@ test('a real fallback response runs tools once and the next round independently 
             ];
             res.setHeader('Content-Type', 'application/json');res.end(JSON.stringify({events}));
         }, async url => {
-            const convo = new Conversation(url, ws, '', 25, {retryPolicy: {...RETRY_POLICY, maxRetries: 1}, retryDependencies: {sleep: async () => {}, onRetry: () => {}}});
+            const convo = new Conversation(url, ws, '', 25, {approvalMode: 'yes', retryPolicy: {...RETRY_POLICY, maxRetries: 1}, retryDependencies: {sleep: async () => {}, onRetry: () => {}}});
             const outcome = await convo.run('run once');assert.equal(outcome.status, 'completed', outcome.message);
             assert.equal(fs.readFileSync(path.join(ws, 'count'), 'utf8'), 'x');assert(!('messages' in convo));
             assert.deepEqual(transports, [true, true, false, true, true, false]);

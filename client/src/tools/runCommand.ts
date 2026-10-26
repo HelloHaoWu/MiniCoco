@@ -3,6 +3,7 @@ import {Handler, ToolError, stringArg, MAX_OUTPUT_BYTES, type ToolArgs} from './
 
 // Commands are trusted local execution: cwd is not an OS sandbox.
 export class RunCommand extends Handler {
+    requiresApproval = true;
     name = 'run_command';
     protected run(args: ToolArgs): Promise<string> {
         const command = stringArg(args, 'command');

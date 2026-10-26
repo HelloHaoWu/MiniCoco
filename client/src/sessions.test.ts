@@ -18,7 +18,7 @@ const fast = {...RETRY_POLICY, maxRetries: 1, baseMs: 0, capMs: 0, jitter: 0};
 const done: RoundResult = {sessionId: 's_test', assistant: {role: 'assistant', content: 'ok'}, toolCalls: [], finish: 'stop'};
 
 async function server(handler: http.RequestListener, fn: (url: string) => Promise<void>): Promise<void> {
-    const instance = http.createServer(handler);instance.listen(0, '127.0.0.1');await once(instance, 'listening');
+    const instance = http.createServer((req, res) => {if(req.url === '/audit') {res.writeHead(202);res.end('{}');return;}handler(req,res);});instance.listen(0, '127.0.0.1');await once(instance, 'listening');
     try {await fn(`http://127.0.0.1:${(instance.address() as import('node:net').AddressInfo).port}`);}
     finally {instance.closeAllConnections();await new Promise<void>(resolve => instance.close(() => resolve()));}
 }
@@ -140,7 +140,7 @@ test('lost first response/body replay durable rounds without creating sessions o
                         res.writeHead(response.status, {'Content-Type': response.headers.get('content-type')!, 'X-Session-Id': response.headers.get('x-session-id')!});
                         res.end(text);
                     }, async proxy => {
-                        const convo = new Conversation(proxy, ws, '', 25, {retryPolicy: fast, retryDependencies: {sleep: async () => {}, onRetry: () => {}}});
+                        const convo = new Conversation(proxy, ws, '', 25, {approvalMode: 'yes', retryPolicy: fast, retryDependencies: {sleep: async () => {}, onRetry: () => {}}});
                         const result = await convo.run('execute once');
                         assert.equal(result.status, 'completed', result.message);
                         assert.equal(fs.readFileSync(path.join(ws, 'count'), 'utf8'), 'x');
@@ -155,7 +155,7 @@ test('lost first response/body replay durable rounds without creating sessions o
                 assert.equal(modelCalls, 4);assert.equal((await listSessions(running.url)).length, 2);
                 const htmlWorkspace = path.join(temp, 'html');fs.mkdirSync(htmlWorkspace);
                 fs.writeFileSync(path.join(htmlWorkspace, 'large.html'), '<>&\u2028\u2029'.repeat(5000));
-                const html = new Conversation(running.url, htmlWorkspace, '', 25, {retryPolicy: fast});
+                const html = new Conversation(running.url, htmlWorkspace, '', 25, {approvalMode: 'yes', retryPolicy: fast});
                 const htmlResult = await html.run('read HTML');
                 assert.equal(htmlResult.status, 'completed', htmlResult.message);
                 assert.equal((await getSession(running.url, html.sessionId)).session.message_count, 4);
@@ -172,7 +172,7 @@ test('failed tool-result submission retains its delta and never executes the too
     const ws = fs.mkdtempSync(path.join(os.tmpdir(), 'minicoco-result-retry-'));
     const requests: RoundRequest[] = [];let fail = true;
     try {
-        const convo = new Conversation('http://unused.invalid', ws, '', 25, {retryPolicy: fast, retryDependencies: {run: async input => {
+        const convo = new Conversation('http://unused.invalid', ws, '', 25, {approvalMode: 'yes', retryPolicy: fast, retryDependencies: {run: async input => {
             requests.push(structuredClone({...input, options: undefined}));
             if (input.query) return {...done, finish: 'tool_calls', toolCalls: [{id: 'once', name: 'run_command', arguments: {command: 'printf x >> count'}}]};
             if (fail) throw new RoundError('fatal', 'http', {httpStatus: 400});
@@ -191,7 +191,7 @@ test('cancelling a tool stages an error result and in-process retry does not rep
     const ws = fs.mkdtempSync(path.join(os.tmpdir(), 'minicoco-tool-cancel-'));
     const controller = new AbortController();let executed = false;
     try {
-        const convo = new Conversation('http://unused.invalid', ws, '', 25, {retryPolicy: fast, retryDependencies: {run: async input => {
+        const convo = new Conversation('http://unused.invalid', ws, '', 25, {approvalMode: 'yes', retryPolicy: fast, retryDependencies: {run: async input => {
             if (input.toolUseResults) {assert.equal(input.toolUseResults[0].isError, true);return done;}
             executed = true;
             return {...done, finish: 'tool_calls', toolCalls: [{id: 'once', name: 'run_command', arguments: {command: 'printf x >> count; sleep 5'}}]};

@@ -18,7 +18,7 @@ const done: Event = {type: 'done', finish_reason: 'tool_calls'};
 const call = (name: string): Event => ({type: 'tool_call', id: 'one', name, arguments: {}});
 
 async function server(handler: http.RequestListener, run: (url: string) => Promise<void>): Promise<void> {
-    const instance = http.createServer((req, res) => {res.setHeader('X-Session-Id', 's_mode');handler(req, res);});
+    const instance = http.createServer((req, res) => {if (req.url === '/audit') {res.writeHead(202);res.end('{}');return;}res.setHeader('X-Session-Id', 's_mode');handler(req, res);});
     instance.listen(0, '127.0.0.1');await once(instance, 'listening');
     try {await run(`http://127.0.0.1:${(instance.address() as import('node:net').AddressInfo).port}`);}
     finally {instance.closeAllConnections();await new Promise<void>(resolve => instance.close(() => resolve()));}
@@ -87,7 +87,7 @@ test('conversation checks an entire tool batch before side effects and fixes its
             assert.equal(fs.existsSync(path.join(workspace, 'should-not-exist')), false);
             assert.equal(fs.existsSync(path.join(workspace, 'side-effect')), false);
         }
-        const safe = new Conversation('http://unused.invalid', workspace, '', 25, {mode: 'safe'});
+        const safe = new Conversation('http://unused.invalid', workspace, '', 25, {mode: 'safe', approvalMode: 'yes'});
         assert.doesNotMatch(await safe.runTool({id: 'w', name: 'write_file', arguments: {target_file: 'allowed', content: 'safe write'}}), /^ERROR:/);
         assert.equal(fs.readFileSync(path.join(workspace, 'allowed'), 'utf8'), 'safe write');
         assert.match(await safe.runTool({id: 'x', name: 'run_command', arguments: {command: 'printf x >> side-effect'}}), /^ERROR:.*not allowed/);

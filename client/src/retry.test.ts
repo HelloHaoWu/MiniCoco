@@ -18,7 +18,7 @@ const frame = (...events: Event[]): string => events.map(event => `data: ${JSON.
 const stop: Event = {type: 'done', finish_reason: 'stop'};
 
 async function withServer(handler: http.RequestListener, run: (url: string) => Promise<void>): Promise<void> {
-    const server = http.createServer((req, res) => {res.setHeader('X-Session-Id', 's_test');handler(req, res);});server.listen(0, '127.0.0.1');await once(server, 'listening');
+    const server = http.createServer((req, res) => {if (req.url === '/audit') {res.writeHead(202);res.end('{}');return;}res.setHeader('X-Session-Id', 's_test');handler(req, res);});server.listen(0, '127.0.0.1');await once(server, 'listening');
     try {await run(`http://127.0.0.1:${(server.address() as import('node:net').AddressInfo).port}`);}
     finally {server.closeAllConnections();await new Promise<void>(resolve => server.close(() => resolve()));}
 }
@@ -152,7 +152,7 @@ test('conversation retains the unacknowledged round for the same query and holds
     const ws = fs.mkdtempSync(path.join(os.tmpdir(), 'minicoco-delta-'));
     try {
         const ids: string[] = [];let fail = true;
-        const convo = new Conversation(args.serverUrl, ws, '', 25, {retryPolicy: fast, retryDependencies: {run: async input => {
+        const convo = new Conversation(args.serverUrl, ws, '', 25, {approvalMode: 'yes', retryPolicy: fast, retryDependencies: {run: async input => {
             ids.push(input.roundId);
             if (fail) throw new RoundError('bad', 'http', {httpStatus: 400});
             return success;
@@ -177,7 +177,7 @@ test('retrying an incomplete tool round never replays a local command', async ()
             const call: Event = {type: 'tool_call', id: 'once', name: 'run_command', arguments: {command: 'printf x >> count'}};
             res.end(requests === 1 ? frame(call) : frame(call, {type: 'done', finish_reason: 'tool_calls'}));
         }, async url => {
-            const convo = new Conversation(url, ws, '', 25, {retryPolicy: fast, retryDependencies: {sleep: async () => {}, onRetry: () => {}}});
+            const convo = new Conversation(url, ws, '', 25, {approvalMode: 'yes', retryPolicy: fast, retryDependencies: {sleep: async () => {}, onRetry: () => {}}});
             assert.equal((await convo.run('run once')).status, 'completed');
             assert.equal(fs.readFileSync(path.join(ws, 'count'), 'utf8'), 'x');
             assert(!('messages' in convo));assert.equal(requests, 3);

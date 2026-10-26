@@ -112,6 +112,7 @@ export class HandlerContext {
 
 export abstract class Handler {
     abstract name: string;
+    requiresApproval = false;
     ctx: HandlerContext;
     constructor(ctx: HandlerContext) { this.ctx = ctx; }
 

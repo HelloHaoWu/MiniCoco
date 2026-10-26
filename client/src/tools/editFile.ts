@@ -1,6 +1,7 @@
 import {Handler, ToolError, stringArg, type ToolArgs} from './base.ts';
 
 export class EditFile extends Handler {
+    requiresApproval = true;
     name = 'edit_file';
     protected run(args: ToolArgs): string {
         const file = this.ctx.resolve(stringArg(args, 'target_file'));

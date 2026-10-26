@@ -27,7 +27,7 @@ async function fixture(fn: (workspace: string, ctx: HandlerContext, temp: string
 }
 
 async function server(fn: http.RequestListener, run: (url: string) => Promise<void>): Promise<void> {
-    const listener = http.createServer((req, res) => {res.setHeader('X-Session-Id', 's_test');fn(req, res);});
+    const listener = http.createServer((req, res) => {if (req.url === '/audit') {res.writeHead(202);res.end('{}');return;}res.setHeader('X-Session-Id', 's_test');fn(req, res);});
     listener.listen(0, '127.0.0.1'); await once(listener, 'listening');
     try { await run(`http://127.0.0.1:${(listener.address() as import('node:net').AddressInfo).port}`); }
     finally { listener.closeAllConnections(); await new Promise<void>(resolve => listener.close(() => resolve())); }
@@ -168,7 +168,7 @@ test('round cancellation interrupts a stalled response', () => server((req, res)
 }));
 
 async function cli(args: string[], input?: string): Promise<{code: number | null; stdout: string; stderr: string}> {
-    const child = spawn(path.join(project, 'run_client.sh'), args, {stdio: ['pipe', 'pipe', 'pipe']});
+    const child = spawn(path.join(project, 'run_client.sh'), ['--yes', ...args], {stdio: ['pipe', 'pipe', 'pipe']});
     let stdout = '', stderr = '';
     child.stdout.on('data', chunk => {stdout += chunk;}); child.stderr.on('data', chunk => {stderr += chunk;});
     const exit = once(child, 'close'); child.stdin.end(input);
@@ -266,7 +266,7 @@ test('Go flaky backend recovers through one real JSON fallback and executes a to
             await new Promise(resolve => setTimeout(resolve, 20));
         }
         assert(ready);
-        const convo = new Conversation(`http://127.0.0.1:${port}`, ws, '', 25, {
+        const convo = new Conversation(`http://127.0.0.1:${port}`, ws, '', 25, {approvalMode: 'yes',
             retryPolicy: {...RETRY_POLICY, maxRetries: 1, baseMs: 0, capMs: 0, jitter: 0},
             retryDependencies: {onRetry: () => {}, runNonStreaming: async (input, signal) => {
                 fallbacks++;return runRoundNonStreaming(input, signal);

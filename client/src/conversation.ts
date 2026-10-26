@@ -1,4 +1,6 @@
-import {randomUUID} from 'node:crypto';
+import {randomUUID, createHash} from 'node:crypto';
+import {approve, type ApprovalMode, type ApprovalPrompt} from './approval.ts';
+import {AuditClient} from './audit.ts';
 import {runRoundWithRetry, type RetryDependencies} from './retry.ts';
 import {RETRY_POLICY, type RetryPolicy} from './tuning.ts';
 import {RoundError} from './roundError.ts';
@@ -15,7 +17,7 @@ export interface RunResult {
     sessionId?: string;
     message?: string;
 }
-export interface ConversationOptions { mode?: ToolMode; sessionId?: string; onSession?: (id: string) => void; retryPolicy?: RetryPolicy; retryDependencies?: RetryDependencies; }
+export interface ConversationOptions { mode?: ToolMode; sessionId?: string; onSession?: (id: string) => void; retryPolicy?: RetryPolicy; retryDependencies?: RetryDependencies; approvalMode?: ApprovalMode; approvalPrompt?: ApprovalPrompt; }
 
 // Only session identity and an unacknowledged delta are kept here. The server
 // owns full history, budgets, input reservations and successful-round commits.
@@ -30,6 +32,8 @@ export class Conversation {
     private readonly mode: ToolMode;
     private options: ConversationOptions;
     private pending?: {request: RoundRequest; query: string};
+    private audit: AuditClient;
+    private traceId = '';
 
     constructor(serverUrl: string, workspace: string, model = '', maxRounds = 25, options: ConversationOptions = {}) {
         const url = new URL(serverUrl);
@@ -37,6 +41,7 @@ export class Conversation {
         if (!Number.isSafeInteger(maxRounds) || maxRounds < 1 || maxRounds > 100) throw new Error('maxRounds must be an integer between 1 and 100');
         if (options.sessionId && !/^[A-Za-z0-9_-]{1,128}$/.test(options.sessionId)) throw new Error('invalid session ID');
         this.serverUrl = serverUrl;
+        this.audit = new AuditClient(serverUrl);
         this.ctx = new HandlerContext(workspace);
         this.workspace = this.ctx.workspace;
         this.model = model;
@@ -68,6 +73,7 @@ export class Conversation {
                     if (this.sessionId !== id) {this.sessionId = id;this.options.onSession?.(id);}
                 }}}, this.options.retryPolicy ?? RETRY_POLICY, signal, this.options.retryDependencies);
                 this.sessionId = result.sessionId ?? this.sessionId;
+                this.traceId = result.traceId ?? '';
                 if (!this.sessionId) throw new Error('backend did not identify the session');
                 // Check the whole batch before any local side effect, including
                 // injected transports that bypass the normal event consumer.
@@ -107,17 +113,25 @@ export class Conversation {
     async runTool(call: ToolCall): Promise<string> {
         process.stdout.write(`→ ${call.name} ${JSON.stringify(call.arguments).slice(0, 120)}\n`);
         let result: string;
+        const start = performance.now();
+        let approved = false, status: 'ok' | 'error' | 'denied' = 'error';
         try {
             const handler = createHandler(call.name, this.ctx);
             if (!handler) throw new ToolError(`unknown tool: ${call.name}`);
             if (!toolAllowed(this.mode, call.name)) throw new ToolError(`tool ${call.name} is not allowed in mode ${this.mode}`);
-            result = await handler.execute(call.arguments);
+            approved = await approve(handler, call, this.options.approvalMode ?? 'deny', this.options.approvalPrompt);
+            if (!approved) {status = 'denied';result = 'ERROR: denied by user';}
+            else {result = await handler.execute(call.arguments);status = result.startsWith('ERROR:') ? 'error' : 'ok';}
         } catch (error) {
             if (this.ctx.signal?.aborted) throw error;
             result = `ERROR: ${(error as Error).message}`;
+        } finally {
+            this.audit.emit({ts: Date.now(), sessionId: this.sessionId, traceId: this.traceId, tool: call.name, argsDigest: createHash('sha1').update(JSON.stringify(call.arguments)).digest('hex').slice(0, 12), approved, status, ms: Math.max(0, Math.round(performance.now() - start))});
         }
         result = boundedOutput(result);
         process.stdout.write(result.slice(0, 240) + (result.length > 240 ? '...\n' : '\n'));
         return result;
     }
+
+    async close(): Promise<void> {await this.audit.flush();}
 }

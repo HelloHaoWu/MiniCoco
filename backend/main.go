@@ -68,6 +68,7 @@ func main() {
 	http.HandleFunc("/sessions", handleSessions)
 	http.HandleFunc("/sessions/", handleSessions)
 	http.HandleFunc("/trace/", handleTrace)
+	http.HandleFunc("/audit", handleAudit)
 
 	route, _ := routeFor("")
 	route, _ = effectiveRoute(route)
