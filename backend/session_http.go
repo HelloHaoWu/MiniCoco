@@ -8,6 +8,15 @@ import (
 )
 
 func writeSessionError(w http.ResponseWriter, err error) {
+	var failure *completionError
+	if errors.As(err, &failure) {
+		status := http.StatusServiceUnavailable
+		if failure.code == codeBadRequest {
+			status = http.StatusBadRequest
+		}
+		writeJSON(w, status, map[string]any{"error": failure.Error(), "code": failure.code, "retryable": failure.retryable})
+		return
+	}
 	status := http.StatusServiceUnavailable
 	if errors.Is(err, ErrStoreNotFound) {
 		status = http.StatusNotFound

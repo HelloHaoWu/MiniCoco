@@ -36,8 +36,8 @@ async function backend(binary: string, temp: string, upstream: string): Promise<
     const reservation = http.createServer();reservation.listen(0, '127.0.0.1');await once(reservation, 'listening');
     const port = (reservation.address() as import('node:net').AddressInfo).port;
     await new Promise<void>(resolve => reservation.close(() => resolve()));
-    const child = spawn(binary, [], {cwd: temp, env: {...process.env, STORE_BACKEND: 'file', MINICOCO_MODEL_IS_FUNCTION_CALL: 'true', MINICOCO_DEBUG_PROMPT: '0', MINICOCO_DATA_DIR: path.join(temp, 'data'), MINICOCO_HOST: '127.0.0.1', MINICOCO_PORT: String(port),
-        LLM_PROVIDER: 'openai', LLM_BASE_URL: upstream, LLM_MODEL: 'test-model', LLM_API_KEY: 'fake-test-key'}, stdio: 'ignore'});
+    const child = spawn(binary, [], {cwd: temp, env: {...process.env, STORE_BACKEND: 'file', MINICOCO_MODEL_IS_FUNCTION_CALL: '', MINICOCO_MODELS_FILE: '', MINICOCO_DEBUG_PROMPT: '0', MINICOCO_DATA_DIR: path.join(temp, 'data'), MINICOCO_HOST: '127.0.0.1', MINICOCO_PORT: String(port),
+        LLM_PROVIDER: 'openai', LLM_BASE_URL: upstream, LLM_MODEL: 'deepseek-flash', LLM_API_KEY: 'fake-test-key'}, stdio: 'ignore'});
     const exit = once(child, 'exit');
     const stop = async (): Promise<void> => {if (child.exitCode === null) child.kill('SIGTERM');await exit;};
     for (let i = 0; i < 100; i++) {
@@ -89,7 +89,7 @@ test('real CLI --resume/--list survive backend restart and retrieve history from
                 const resumed = await cli(['next-query', '--resume', sid, '--server', running.url]);
                 assert.equal(resumed.code, 0, resumed.stderr);assert.match(resumed.stdout, /remember-key\|next-query/);
                 assert.equal(received.length, 2);
-                assert.deepEqual(received[1].map(message => message.role), ['system', 'user', 'assistant', 'user']);
+                assert.deepEqual(received[1].map(message => message.role), ['system', 'user', 'user', 'assistant', 'user']);
                 assert(received[1].every(message => !('msg_id' in message) && !('status' in message)));
                 const updated = await getSession(running.url, sid);
                 assert.equal(updated.session.total_tokens, 10);assert.equal(updated.session.message_count, 4);

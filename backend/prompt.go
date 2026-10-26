@@ -11,24 +11,27 @@ import (
 
 // Resources are embedded so the backend remains a self-contained binary.
 //
-//go:embed prompts/system.txt
-var systemPrompt string
+//go:embed prompts/system_openai.txt prompts/system_claude.txt
+var promptsFS embed.FS
 
 //go:embed tools/*.json
 var toolsFS embed.FS
 
 // The backend owns the system prompt, tool policy and persisted conversation.
-func genPrompt(history []map[string]any, workspace string, mode Mode) ([]map[string]any, []json.RawMessage, error) {
+func genPrompt(history []map[string]any, workspace string, mode Mode, route ModelRoute) ([]map[string]any, []json.RawMessage, error) {
 	tools, err := buildTools(mode)
 	if err != nil {
 		return nil, nil, completionFailure(codeConfig, false, "cannot build tool catalog: "+err.Error(), err)
 	}
-	sys := systemPrompt
-	if workspace != "" {
-		sys += fmt.Sprintf("\n\n# Environment\nThe workspace root is: %s\n", workspace)
+	prompt, err := promptsFS.ReadFile("prompts/system_" + route.Family + ".txt")
+	if err != nil {
+		return nil, nil, completionFailure(codeConfig, false, "unsupported prompt family", nil)
 	}
-	messages := make([]map[string]any, 0, len(history)+1)
-	messages = append(messages, map[string]any{"role": "system", "content": sys})
+	messages := make([]map[string]any, 0, len(history)+2)
+	messages = append(messages, map[string]any{"role": "system", "content": string(prompt)})
+	if workspace != "" {
+		messages = append(messages, map[string]any{"role": "user", "content": fmt.Sprintf("# Environment\nThe workspace root is: %s\n", workspace)})
+	}
 	messages = append(messages, history...)
 	if err := debugPrompt(messages); err != nil {
 		return nil, nil, err

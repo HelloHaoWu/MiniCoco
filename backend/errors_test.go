@@ -155,7 +155,7 @@ func TestConfigurationAndCancellationClassification(t *testing.T) {
 			t.Setenv("LLM_PROVIDER", test.provider)
 			t.Setenv("LLM_API_KEY", test.key)
 			t.Setenv("LLM_BASE_URL", test.base)
-			err := streamCompletion(nil, nil, "model", func(Event) { t.Fatal("configuration failure emitted content") })
+			err := streamCompletion(nil, nil, defaultModel, func(Event) { t.Fatal("configuration failure emitted content") })
 			if err == nil {
 				t.Fatal("bad configuration accepted")
 			}
@@ -167,7 +167,7 @@ func TestConfigurationAndCancellationClassification(t *testing.T) {
 	}
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
-	err := streamCompletionContext(ctx, nil, nil, "model", func(Event) { t.Fatal("cancelled request emitted content") })
+	err := streamCompletionContext(ctx, nil, nil, defaultModel, func(Event) { t.Fatal("cancelled request emitted content") })
 	code, retryable := classifyCompletionError(fmt.Errorf("wrapped: %w", err))
 	if code != codeInternal || retryable {
 		t.Fatal("user cancellation marked retryable")

@@ -65,22 +65,62 @@ mock 模型走确定性的两轮循环 (list_dir -> 给结论), 证明闭环跑�
 
 客户端继续提交 `toolUseResults: [{id,name,output,isError}]`。后端先校验结果完整匹配上一批调用，再按**请求顺序**格式化、持久化并加入 prompt；不按 ID 字典序排序。旧实现按调用顺序回填，现按文档统一为请求顺序，CLI 正常发送顺序保持不变。
 
-- 默认 `MINICOCO_MODEL_IS_FUNCTION_CALL=true`：NativeFormatter，每个结果一条 `role:tool` 消息，保留 tool_call_id、原始输出及既有 ERROR 前缀语义。
-- `MINICOCO_MODEL_IS_FUNCTION_CALL=false`：XmlFormatter，整批结果合成一条 `role:user` 消息，每项为 `<tool_result><status>succeeded|failed</status><id>调用ID</id><工具名>输出</工具名></tool_result>`。状态由 isError 决定；输出与 ID 转义，非法 XML 字符替换为 U+FFFD，工具名仅允许已注册名称。
-- 能力开关当前作用于整个后端，严格接受 true/false，默认 true；Phase 4 将用模型路由能力字段替代。**本 Part 实现结果呈现，未增加 XML 工具调用生成/解析**，上游仍使用现有 function-call 请求与响应管线。
+- 路由 `isFunctionCall:true`（默认真实模型及 mock）：NativeFormatter，每个结果一条 `role:tool` 消息，保留 tool_call_id、原始输出及既有 ERROR 前缀语义。
+- 路由 `isFunctionCall:false`（mock-xml 演示）：XmlFormatter，整批结果合成一条 `role:user` 消息，每项为 `<tool_result><status>succeeded|failed</status><id>调用ID</id><工具名>输出</工具名></tool_result>`。状态由 isError 决定；输出与 ID 转义，非法 XML 字符替换为 U+FFFD，工具名仅允许已注册名称。
+- Phase 4 Part 1 已用模型路由字段替代全局能力开关。**此处实现结果呈现，未增加 XML 工具调用生成/解析**，上游仍使用现有 function-call 请求与响应管线。
 
 ```bash
 # 用 mock 验证 XML 回填；建议使用独立数据目录
-MINICOCO_MODEL_IS_FUNCTION_CALL=false LLM_PROVIDER=mock \
+LLM_MODEL=mock-xml \
 MINICOCO_DATA_DIR=/absolute/path/to/xml-demo bash run_backend.sh
 
 # 显式开启完整 messages 调试输出（stderr，含工作区和会话内容）
 MINICOCO_DEBUG_PROMPT=1 LLM_PROVIDER=mock bash run_backend.sh
 ```
 
-两个开关也可通过本地 .env 配置，已导出环境变量优先。调试默认关闭，不输出 HTTP 认证头或配置中的 API Key，但 messages 本身可能含私密代码与用户文本，调试日志应留在本地。
+路由配置和调试开关支持本地 .env，已导出环境变量优先。调试默认关闭，不输出 HTTP 认证头或配置中的 API Key，但 messages 本身可能含私密代码与用户文本，调试日志应留在本地。
 
-格式化后的输入是持久化历史的一部分。XML 格式加入轮次指纹，默认 Native 保留旧指纹；同轮不能切换格式。会话已有工具结果后，切换能力开关会拒绝继续，需恢复原配置或新建会话，不自动转换旧历史。XML 会增加体积，工具批次暴露前按最坏转义后的 Go JSON 大小预留预算，超限提前失败；每项原始结果仍受 64 KiB 限制。
+格式化后的输入是持久化历史的一部分。XML 格式加入轮次指纹，默认 Native 保留旧指纹；同轮不能切换格式。会话已有工具结果后，切换到不同结果格式的模型会拒绝继续，需恢复原配置或新建会话，不自动转换旧历史。XML 会增加体积，工具批次暴露前按最坏转义后的 Go JSON 大小预留预算，超限提前失败；每项原始结果仍受 64 KiB 限制。
+
+#### 模型路由与模型族提示词（Phase 4 Part 1）
+
+后端将 `backend/models.json` 编译嵌入二进制，按请求 `model` 查表；空值首轮使用 `LLM_MODEL`（默认 deepseek-flash），恢复轮使用会话记录的模型。未知模型返回 HTTP 400、`code:bad_request`、`retryable:false` 和按名称排序的支持列表，不创建会话或调用上游；客户端按 HTTP 400 立即失败，不退避或 JSON 兜底。
+
+| 模型路由 | provider / family | 工具结果 | temperature / thinking |
+| --- | --- | --- | --- |
+| deepseek-flash、deepseek-v4-pro | openai / openai | Native | 0.7 / disabled |
+| mock | mock / openai | Native | 0 / 省略 |
+| mock-claude | mock / claude | Native | 0 / 省略 |
+| mock-xml | mock / openai | XML | 0 / 省略 |
+
+`family` 选择 system_openai.txt 或 system_claude.txt；mock-claude 只演示提示词选择，未接入 Anthropic API。一个模型轮使用同一路由快照决定提示词、formatter 和上游参数。`LLM_PROVIDER=mock` 保留离线覆盖能力；空值/openai 使用路由 provider，mock 路由始终留在本地。`LLM_BASE_URL` 非空时覆盖所有 openai 路由的端点；按模型使用不同端点时应将其设为空。已提交成功轮直接回放，不因供应商环境配置失效而再次请求模型。
+
+工作区路径现在作为 system 之后的首条 user 环境消息注入（仅非空路径），不会写入 transcript。相同 family/mode 的 system 和 tools 与工作区无关；未实施供应商缓存命中/费用测量。既有 1 MiB / 512 条历史预算继续生效。
+
+路由 `maxTokens` 是给后续预算层预留的**项目配置上限**：DeepSeek 路由沿阶段设计取 131072，mock 取 32768；本 Part 不做真实 token 计数，也不把它发成输出 `max_tokens`。它不是供应商当前窗口规格：2026-10-26 官方页面列两模型上下文 1M；0.7 为本项目路线配置，非官方编码任务推荐值。两条 DeepSeek 路由均显式禁用默认 thinking，避免尚未实现 reasoning_content 持久化/回传时破坏工具多轮。[模型规格](https://api-docs.deepseek.com/quick_start/pricing/)、[thinking 说明](https://api-docs.deepseek.com/guides/thinking_mode/)、[温度建议](https://api-docs.deepseek.com/quick_start/parameter_settings/)。未调用真实模型验证账号可用性。
+
+自定义 OpenAI 兼容模型通过 `MINICOCO_MODELS_FILE=/absolute/path/models.json` 提供**完整替代表**（1 MiB 上限），不隐式接收任意模型名：
+
+```json
+{
+  "my-model": {
+    "provider": "openai", "baseURL": "https://example.com/v1",
+    "family": "openai", "maxTokens": 32768,
+    "isFunctionCall": true, "temperature": 0.2
+  }
+}
+```
+
+相对配置路径从后端 cwd 解析；启动检查并在每个新请求读取，运行中更新文件请使用原子替换；单轮不会中途重读表。表内各项必须具备上例六个字段，provider 仅 openai/mock，family 仅 openai/claude；端点禁止内嵌认证、查询和 fragment，temperature 0..2，maxTokens 正整数；可选 thinking 仅支持 disabled 或省略，enabled 需待 reasoning 回传实现。其他供应商原生协议未接入。成功轮仍回放保存的结果；重试 pending 时需保持路由配置稳定，改路由建议使用新会话；删除旧模型路由会使对应会话无法继续/回放，应在替代表中保留所需条目。
+
+**迁移：删除旧环境或 .env 中的 MINICOCO_MODEL_IS_FUNCTION_CALL**，改用每个路由的 isFunctionCall。旧键非空会明确报配置错误，避免全局值悄悄覆盖模型能力。自定义模型也需先加入路由表。会话元数据记录首轮模型；显式 --model 可覆盖某次调用的各轮请求，不改写会话默认模型，恢复时如需覆盖应再次指定。
+
+```bash
+# 无需真实供应商，验证另一模型族
+LLM_MODEL=mock-claude bash run_backend.sh
+# 使用自定义完整路由表，并由表决定不同模型的端点
+MINICOCO_MODELS_FILE=/absolute/path/models.json LLM_MODEL=my-model LLM_BASE_URL= bash run_backend.sh
+```
 
 #### flaky mock：确定性故障注入（Phase 1 Part 1）
 
@@ -94,7 +134,7 @@ LLM_PROVIDER=mock LLM_MOCK_MODE=flaky LLM_MOCK_FLAKY_FAILS=2 bash run_backend.sh
 
 `LLM_MOCK_MODE` 默认 `normal`；`flaky` 下 `LLM_MOCK_FLAKY_FAILS` 默认 2，接受非负整数。
 失败预算在后端启动时初始化、每进程一份，并发时原子消耗；`/health` 不消耗预算，恢复后不会在下一轮重新注入失败。
-非法 mock 配置会在启动时失败，真实模型 provider 忽略这些 mock 设置。这两个参数也可通过本地 `.env` 配置，导出的环境变量优先。
+默认模型的有效 provider 为 mock 时才初始化故障预算（可由 LLM_MODEL=mock 或 LLM_PROVIDER=mock 选择）；否则忽略这些 mock 设置。非法有效 mock 配置会在启动时失败。这两个参数也可通过本地 `.env` 配置，导出的环境变量优先。
 
 客户端已支持类型化错误和可取消的自动重试：只有瞬时故障进入退避，fatal、用户取消和已成功轮不重试。
 对瞬时故障，默认首次请求之外最多重试 7 次（8 次流式尝试），基础退避依次为 3/6/12/24/30/30/30 秒，并增加 0—25% 正向抖动。每次请求单独计算 125 秒超时；它不是整轮重试的总超时。
@@ -295,7 +335,8 @@ MiniCoco/
 │   ├── store_contract_test.go    #   两档复用的接口验收
 │   ├── go.mod                    #   默认 Go 1.22、零第三方模块
 │   ├── go.realdb.mod / .sum      #   真实档 Go 1.26、锁定驱动依赖
-│   ├── prompts/system.txt        #   主系统提示词（编译进二进制）
+│   ├── models.go / models.json   #   模型路由、能力与配置校验（内嵌默认表）
+│   ├── prompts/system_*.txt      #   openai / claude 模型族提示词（编译嵌入）
 │   └── tools/*__vN.json          #   带 availableVersion 的工具资源，输出标准 function Schema
 ├── client/                       # ← 真实前端映射（前端：TS，Agent 循环 + 本地工具）
 │   ├── package.json / tsconfig.json
@@ -320,7 +361,7 @@ MiniCoco/
 
 - **历史放后端**：服务端从持久化 transcript 读取历史，客户端只提交增量；三个接口分离元数据、正文与协调。默认 JSON/JSONL/进程内实现便于离线运行，可选 SQLite/MongoDB/Redis 档保留同样的轮次和去重语义。
 - **原生 function calling**：直接用模型的 `tools` / `tool_calls`。真实前后端设计 还支持 XML 风格工具协议、prompt cache、ABTest 分流等。
-- **逐步完善实现**：已实现模型请求重试、一次性 JSON 兜底、会话持久化/恢复、可选真实库档、工具版本/模式和 Native/XML 结果回填；尚未实现 XML 工具调用解析、自动模型路由、上下文压缩算法、tracing、权限审批、memory、subagent / MCP。使用明确的预算和失败状态控制基本边界。
+- **逐步完善实现**：已实现模型请求重试、一次性 JSON 兜底、会话持久化/恢复、可选真实库档、工具版本/模式、Native/XML 结果回填和按模型名路由/模型族提示词；尚未实现 XML 工具调用解析、按任务自动选模、上下文压缩算法、tracing、权限审批、memory、subagent / MCP。使用明确的预算和失败状态控制基本边界。
 - **工具集**：保留 6 个核心工具。新增工具时提供带版本/元数据的 JSON，更新后端 ToolName、固定顺序与模式策略，并在客户端增加 Handler、注册表和模式策略，补齐两端回归；仅放一个 JSON 不会自动开放执行。
 - **语言**：真实后端是 Java；这里用 Go 保持「编译型、单二进制、无框架」的最小形态，前端沿用 TypeScript。
 

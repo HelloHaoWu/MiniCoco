@@ -33,7 +33,7 @@ func main() {
 	if _, err := buildTools(ModeFull); err != nil {
 		log.Fatal(err)
 	}
-	if _, err := modelIsFunctionCall(""); err != nil {
+	if _, err := routeFor(""); err != nil {
 		log.Fatal(err)
 	}
 	var err error
@@ -54,7 +54,9 @@ func main() {
 	http.HandleFunc("/sessions", handleSessions)
 	http.HandleFunc("/sessions/", handleSessions)
 
-	fmt.Printf("[MiniCoco backend] http://%s  (LLM_PROVIDER=%s, LLM_MODEL=%s)\n", addr, getenv("LLM_PROVIDER", defaultProvider), getenv("LLM_MODEL", defaultModel))
+	route, _ := routeFor("")
+	route, _ = effectiveRoute(route)
+	fmt.Printf("[MiniCoco backend] http://%s  (provider=%s, model=%s, family=%s)\n", addr, route.Provider, route.Name, route.Family)
 	fmt.Println("  POST /chat/stream   GET /health   GET /sessions   GET /sessions/<id>")
 	server := &http.Server{Addr: addr, ReadHeaderTimeout: 5 * time.Second, ReadTimeout: 15 * time.Second, IdleTimeout: 60 * time.Second}
 	if err := server.ListenAndServe(); err != nil {
@@ -63,8 +65,16 @@ func main() {
 }
 
 func handleHealth(w http.ResponseWriter, r *http.Request) {
+	route, err := routeFor("")
+	if err == nil {
+		route, err = effectiveRoute(route)
+	}
+	if err != nil {
+		writeSessionError(w, err)
+		return
+	}
 	writeJSON(w, http.StatusOK, map[string]string{
-		"status": "ok", "provider": getenv("LLM_PROVIDER", defaultProvider),
+		"status": "ok", "provider": route.Provider, "model": route.Name,
 	})
 }
 

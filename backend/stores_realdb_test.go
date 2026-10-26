@@ -449,7 +449,7 @@ func TestRealRedisCrossProcess(t *testing.T) {
 }
 
 func TestRealWiringAndCLI(t *testing.T) {
-	t.Setenv("MINICOCO_MODEL_IS_FUNCTION_CALL", "true")
+	t.Setenv("MINICOCO_MODEL_IS_FUNCTION_CALL", "")
 	t.Setenv("MINICOCO_DEBUG_PROMPT", "0")
 	stores := realContractFactory(t)()
 	defer stores.close()
@@ -548,7 +548,7 @@ func TestRealXMLToolResultPersistence(t *testing.T) {
 	previous := activeSessions
 	activeSessions = &sessionService{meta: stores.meta, transcript: stores.transcript, coord: stores.coord}
 	defer func() { activeSessions = previous }()
-	t.Setenv("MINICOCO_MODEL_IS_FUNCTION_CALL", "false")
+	t.Setenv("LLM_MODEL", "mock-xml")
 	t.Setenv("MINICOCO_DEBUG_PROMPT", "0")
 	t.Setenv("LLM_PROVIDER", "mock")
 	preserveMockBudget(t)

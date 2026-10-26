@@ -2,7 +2,6 @@ package main
 
 import (
 	"strconv"
-	"strings"
 	"sync/atomic"
 )
 
@@ -12,7 +11,14 @@ var flakyRemaining atomic.Int64
 
 func configureMockFaults() error {
 	flakyRemaining.Store(0)
-	if strings.ToLower(getenv("LLM_PROVIDER", defaultProvider)) != "mock" {
+	route, err := routeFor("")
+	if err == nil {
+		route, err = effectiveRoute(route)
+	}
+	if err != nil {
+		return err
+	}
+	if route.Provider != "mock" {
 		return nil
 	}
 	switch getenv("LLM_MOCK_MODE", "normal") {

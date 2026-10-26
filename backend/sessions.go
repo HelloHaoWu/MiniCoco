@@ -86,6 +86,9 @@ func (service *sessionService) resolve(ctx context.Context, req *ChatRequest) er
 		if model == "" {
 			model = getenv("LLM_MODEL", defaultModel)
 		}
+		if _, routeErr := routeFor(model); routeErr != nil {
+			return routeErr
+		}
 		_, err = service.meta.CreateSession(ctx, Session{ID: req.SessionID, Workspace: req.Workspace, Model: model})
 		if err != nil && !errors.Is(err, ErrStoreConflict) {
 			return err
@@ -101,7 +104,8 @@ func (service *sessionService) resolve(ctx context.Context, req *ChatRequest) er
 	if req.Model == "" {
 		req.Model = session.Model
 	}
-	return nil
+	_, err = routeFor(req.Model)
+	return err
 }
 
 func (service *sessionService) reconcile(ctx context.Context, sid string) error {
@@ -156,10 +160,12 @@ func (service *sessionService) process(ctx context.Context, req ChatRequest, emi
 	if err != nil {
 		return completionFailure(codeBadRequest, false, err.Error(), err)
 	}
-	isFunctionCall, err := modelIsFunctionCall(req.Model)
+	route, err := routeFor(req.Model)
 	if err != nil {
 		return err
 	}
+	isFunctionCall := route.IsFunctionCall
+	ctx = context.WithValue(ctx, modelRouteContextKey{}, route)
 	formatIdentity := ""
 	if !isFunctionCall {
 		formatIdentity = "xml-v1"
@@ -239,7 +245,7 @@ func (service *sessionService) process(ctx context.Context, req ChatRequest, emi
 	for i, message := range current {
 		messages[i] = message
 	}
-	messages, tools, err := genPrompt(messages, req.Workspace, mode)
+	messages, tools, err := genPrompt(messages, req.Workspace, mode, route)
 	if err != nil {
 		return err
 	}

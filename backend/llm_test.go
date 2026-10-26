@@ -51,6 +51,7 @@ func TestProviderOverridesAndKeyRedaction(t *testing.T) {
 	}
 	t.Setenv("LLM_API_KEY", "local-test-secret")
 	t.Setenv("LLM_MODEL", "custom-model")
+	writeTestRoutes(t, map[string]ModelRoute{"request-model": {Provider: "openai", BaseURL: defaultBaseURL, Family: "openai", MaxTokens: 8192, IsFunctionCall: true, Temperature: 0.25}})
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		var payload map[string]any
 		json.NewDecoder(r.Body).Decode(&payload)

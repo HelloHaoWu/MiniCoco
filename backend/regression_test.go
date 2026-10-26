@@ -46,7 +46,7 @@ func TestFragmentedToolCallsAreOrderedAndPreserved(t *testing.T) {
 		toolChunk(1, "", "", `"a.txt"}`, "tool_calls") + "data: [DONE]\n\n"
 	upstreamFixture(t, body, "text/event-stream")
 	var events []Event
-	if err := streamCompletion(nil, nil, "model", func(event Event) { events = append(events, event) }); err != nil {
+	if err := streamCompletion(nil, nil, defaultModel, func(event Event) { events = append(events, event) }); err != nil {
 		t.Fatal(err)
 	}
 	if len(events) != 3 || events[0].ID != "first" || events[1].ID != "second" || string(events[1].Arguments) != `{"target_file":"a.txt"}` || events[2].FinishReason != FinishToolCalls {
@@ -74,7 +74,7 @@ func TestInvalidStreamsNeverEmitExecutableTools(t *testing.T) {
 		t.Run(test.name, func(t *testing.T) {
 			upstreamFixture(t, test.body, test.contentType)
 			var events []Event
-			err := streamCompletion(nil, nil, "model", func(event Event) { events = append(events, event) })
+			err := streamCompletion(nil, nil, defaultModel, func(event Event) { events = append(events, event) })
 			if err == nil {
 				t.Fatal("invalid stream accepted")
 			}

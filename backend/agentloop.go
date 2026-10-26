@@ -1,6 +1,9 @@
 package main
 
-import "context"
+import (
+	"context"
+	"encoding/json"
+)
 
 // Per-turn orchestration.
 //
@@ -9,9 +12,14 @@ import "context"
 // model once. The client still drives the tool loop by sending incremental
 // results; successful events/done are exposed only after durable commit.
 func processModelContext(ctx context.Context, messages []map[string]any, workspace, model string, emit func(Event)) {
-	messages, tools, err := genPrompt(messages, workspace, ModeFull)
+	route, err := routeFor(model)
 	if err == nil {
-		err = streamCompletionContext(ctx, messages, tools, model, emit)
+		ctx = context.WithValue(ctx, modelRouteContextKey{}, route)
+		var tools []json.RawMessage
+		messages, tools, err = genPrompt(messages, workspace, ModeFull, route)
+		if err == nil {
+			err = streamCompletionContext(ctx, messages, tools, model, emit)
+		}
 	}
 	if err != nil {
 		// Surface upstream/LLM failures to the client, then still end the round.

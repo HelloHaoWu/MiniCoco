@@ -131,7 +131,7 @@ func TestToolResultReservationBoundsEscapedOutputs(t *testing.T) {
 func TestToolResultPromptAndPersistence(t *testing.T) {
 	for _, native := range []bool{true, false} {
 		t.Run(fmt.Sprintf("native=%t", native), func(t *testing.T) {
-			t.Setenv("MINICOCO_MODEL_IS_FUNCTION_CALL", fmt.Sprint(native))
+			configureTestCapability(t, native)
 			t.Setenv("MINICOCO_DEBUG_PROMPT", "0")
 			service := sessionFixture(t)
 			t.Setenv("LLM_PROVIDER", "openai")
@@ -181,7 +181,7 @@ func TestToolResultPromptAndPersistence(t *testing.T) {
 				t.Fatal("replay called model or changed result")
 			}
 			// New request on the opposite capability must not mix representations.
-			t.Setenv("MINICOCO_MODEL_IS_FUNCTION_CALL", fmt.Sprint(!native))
+			configureTestCapability(t, !native)
 			_, rejected := deltaResponse(t, request)
 			if len(rejected) != 2 || rejected[0].Code != codeBadRequest {
 				t.Fatal("same round changed its format")
@@ -195,7 +195,7 @@ func TestToolResultPromptAndPersistence(t *testing.T) {
 }
 
 func TestXMLReservationFailsBeforeExposingTools(t *testing.T) {
-	t.Setenv("MINICOCO_MODEL_IS_FUNCTION_CALL", "false")
+	configureTestCapability(t, false)
 	service := sessionFixture(t)
 	body := toolChunk(0, "one", "read_file", `{}`, "") + toolChunk(1, "two", "list_dir", `{}`, "tool_calls") + "data: [DONE]\n\n"
 	upstreamFixture(t, body, "text/event-stream")
@@ -225,14 +225,14 @@ func TestPromptDebugOptIn(t *testing.T) {
 	results, _ := (XmlFormatter{}).Format([]ToolUseResult{{ID: "one", Name: "read_file", Output: "missing", IsError: true}})
 	history := []map[string]any{results[0]}
 	t.Setenv("MINICOCO_DEBUG_PROMPT", "0")
-	if _, _, err := genPrompt(history, "/tmp/debug-workspace", ModeReadonly); err != nil {
+	if _, _, err := genPrompt(history, "/tmp/debug-workspace", ModeReadonly, ModelRoute{Family: "openai"}); err != nil {
 		t.Fatal(err)
 	}
 	if data, _ := os.ReadFile(path); len(data) != 0 {
 		t.Fatal("debug prompt logged without opt-in")
 	}
 	t.Setenv("MINICOCO_DEBUG_PROMPT", "1")
-	want, _, err := genPrompt(history, "/tmp/debug-workspace", ModeReadonly)
+	want, _, err := genPrompt(history, "/tmp/debug-workspace", ModeReadonly, ModelRoute{Family: "openai"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -250,33 +250,38 @@ func TestPromptDebugOptIn(t *testing.T) {
 }
 
 func TestFormatterConfigurationAndLocalEnv(t *testing.T) {
-	for _, key := range []string{"MINICOCO_MODEL_IS_FUNCTION_CALL", "MINICOCO_DEBUG_PROMPT"} {
+	t.Setenv("MINICOCO_MODEL_IS_FUNCTION_CALL", "")
+	t.Setenv("MINICOCO_MODELS_FILE", "")
+	if native, err := modelIsFunctionCall("mock"); err != nil || !native {
+		t.Fatal("mock must be native")
+	}
+	if native, err := modelIsFunctionCall("mock-xml"); err != nil || native {
+		t.Fatal("mock-xml must use XML")
+	}
+	for _, key := range []string{"MINICOCO_MODELS_FILE", "MINICOCO_DEBUG_PROMPT"} {
 		t.Setenv(key, "")
 		os.Unsetenv(key)
 	}
-	if native, err := modelIsFunctionCall("any-model"); err != nil || !native {
-		t.Fatal("default must be native")
-	}
 	path := filepath.Join(t.TempDir(), ".env")
-	if err := os.WriteFile(path, []byte("MINICOCO_MODEL_IS_FUNCTION_CALL=false\nMINICOCO_DEBUG_PROMPT=1\n"), 0600); err != nil {
+	if err := os.WriteFile(path, []byte("MINICOCO_MODELS_FILE=/fake/routes.json\nMINICOCO_DEBUG_PROMPT=1\n"), 0600); err != nil {
 		t.Fatal(err)
 	}
 	if err := loadEnvFile(path); err != nil {
 		t.Fatal(err)
 	}
-	if native, err := modelIsFunctionCall("any-model"); err != nil || native || os.Getenv("MINICOCO_DEBUG_PROMPT") != "1" {
-		t.Fatal("formatter/debug .env keys were not loaded")
+	if os.Getenv("MINICOCO_MODELS_FILE") != "/fake/routes.json" || os.Getenv("MINICOCO_DEBUG_PROMPT") != "1" {
+		t.Fatal("route/debug settings not loaded")
 	}
-	t.Setenv("MINICOCO_MODEL_IS_FUNCTION_CALL", "true")
+	t.Setenv("MINICOCO_MODELS_FILE", "")
 	if err := loadEnvFile(path); err != nil {
 		t.Fatal(err)
 	}
-	if native, err := modelIsFunctionCall("any-model"); err != nil || !native {
-		t.Fatal("file overrode exported capability")
+	if os.Getenv("MINICOCO_MODELS_FILE") != "" {
+		t.Fatal("file overrode exported routing setting")
 	}
 	t.Setenv("MINICOCO_MODEL_IS_FUNCTION_CALL", "secret-invalid-value")
-	_, err := modelIsFunctionCall("any-model")
+	_, err := modelIsFunctionCall("mock")
 	if err == nil || strings.Contains(err.Error(), "secret-invalid-value") {
-		t.Fatal("invalid capability accepted or value leaked")
+		t.Fatal("retired setting accepted or leaked")
 	}
 }

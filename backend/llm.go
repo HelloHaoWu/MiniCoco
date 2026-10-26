@@ -9,7 +9,6 @@ import (
 	"fmt"
 	"io"
 	"net/http"
-	"net/url"
 	"os"
 	"sort"
 	"strings"
@@ -20,7 +19,7 @@ import (
 //
 // Mirrors Coco's ModelFactory -> LLMBase -> FunctionCallStreamProcessor: pick
 // a provider, stream the completion, and turn raw SSE deltas into the small set
-// of Events in protocol.go. Two providers, chosen by env LLM_PROVIDER:
+// of Events in protocol.go. Provider selection comes from the model route:
 //   - "openai": any OpenAI-compatible /chat/completions endpoint (DeepSeek, ...)
 //   - "mock":   deterministic, offline; runs the whole harness with no API key.
 
@@ -32,7 +31,15 @@ func streamCompletionContext(ctx context.Context, messages []map[string]any, too
 	if err := ctx.Err(); err != nil {
 		return err
 	}
-	switch strings.ToLower(getenv("LLM_PROVIDER", defaultProvider)) {
+	route, err := routeForContext(ctx, model)
+	if err == nil {
+		route, err = effectiveRoute(route)
+	}
+	if err != nil {
+		return err
+	}
+	ctx = context.WithValue(ctx, modelRouteContextKey{}, route)
+	switch route.Provider {
 	case "openai":
 		return openaiStreamContext(ctx, messages, tools, model, emit)
 	case "mock":
@@ -80,27 +87,27 @@ func openaiStream(messages []map[string]any, tools []json.RawMessage, model stri
 }
 
 func openaiStreamContext(ctx context.Context, messages []map[string]any, tools []json.RawMessage, model string, emit func(Event)) error {
-	base := strings.TrimRight(getenv("LLM_BASE_URL", defaultBaseURL), "/")
-	if model == "" {
-		model = getenv("LLM_MODEL", defaultModel)
+	route, err := routeForContext(ctx, model)
+	if err == nil {
+		route, err = effectiveRoute(route)
 	}
+	if err != nil {
+		return err
+	}
+	base := strings.TrimRight(route.BaseURL, "/")
+	model = route.Name
 	apiKey := os.Getenv("LLM_API_KEY")
 	if apiKey == "" {
 		return completionFailure(codeConfig, false, "LLM_API_KEY is missing; set it in the project .env or environment", nil)
 	}
-	endpoint, err := url.Parse(base)
-	if err != nil || (endpoint.Scheme != "http" && endpoint.Scheme != "https") || endpoint.Host == "" || endpoint.User != nil || endpoint.RawQuery != "" || endpoint.Fragment != "" {
-		return completionFailure(codeConfig, false, "LLM_BASE_URL must be an HTTP(S) base URL without credentials, query or fragment", nil)
-	}
 	payload := map[string]any{
 		"model": model, "messages": messages, "tools": tools,
-		"stream": true, "temperature": 0,
+		"stream": true, "temperature": route.Temperature,
 		"stream_options": map[string]bool{"include_usage": true},
 	}
-	// This small client does not replay reasoning_content between tool turns.
-	// DeepSeek defaults to thinking mode; disable it for this text/tool harness.
-	if strings.HasPrefix(model, "deepseek-") {
-		payload["thinking"] = map[string]string{"type": "disabled"}
+	// Reasoning replay is not yet supported; route validation rejects enabled.
+	if route.Thinking != "" {
+		payload["thinking"] = map[string]string{"type": route.Thinking}
 	}
 	reqBody, err := json.Marshal(payload)
 	if err != nil {

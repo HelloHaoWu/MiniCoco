@@ -79,17 +79,9 @@ func (XmlFormatter) Format(results []ToolUseResult) ([]Message, error) {
 	return []Message{{"role": "user", "content": body.String()}}, nil
 }
 
-// The seam is global until Phase 4 supplies per-model capabilities. An invalid
-// setting is fatal, never a silent downgrade to a different representation.
-func modelIsFunctionCall(_ string) (bool, error) {
-	switch getenv("MINICOCO_MODEL_IS_FUNCTION_CALL", "true") {
-	case "true":
-		return true, nil
-	case "false":
-		return false, nil
-	default:
-		return false, completionFailure(codeConfig, false, "MINICOCO_MODEL_IS_FUNCTION_CALL must be true or false", nil)
-	}
+func modelIsFunctionCall(model string) (bool, error) {
+	route, err := routeFor(model)
+	return route.IsFunctionCall, err
 }
 
 type pendingToolCall struct {

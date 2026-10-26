@@ -1,0 +1,7 @@
+{
+  "deepseek-flash": {"provider":"openai","baseURL":"https://api.deepseek.com/v1","family":"openai","maxTokens":131072,"isFunctionCall":true,"temperature":0.7,"thinking":"disabled"},
+  "deepseek-v4-pro": {"provider":"openai","baseURL":"https://api.deepseek.com/v1","family":"openai","maxTokens":131072,"isFunctionCall":true,"temperature":0.7,"thinking":"disabled"},
+  "mock": {"provider":"mock","baseURL":"","family":"openai","maxTokens":32768,"isFunctionCall":true,"temperature":0},
+  "mock-claude": {"provider":"mock","baseURL":"","family":"claude","maxTokens":32768,"isFunctionCall":true,"temperature":0},
+  "mock-xml": {"provider":"mock","baseURL":"","family":"openai","maxTokens":32768,"isFunctionCall":false,"temperature":0}
+}
