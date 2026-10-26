@@ -179,9 +179,23 @@ async function cli(args: string[], input?: string): Promise<{code: number | null
 }
 
 test('CLI consumes all piped queries, returns failures as nonzero, and validates options', () => fixture(async ws => {
-    await server((req, res) => {res.setHeader('Content-Type', 'text/event-stream');res.end(events({type: 'text', delta: 'ok'}, end));}, async url => {
+    let requests = 0;
+    await server((req, res) => {
+        requests++;
+        res.setHeader('Content-Type', 'text/event-stream');
+        res.write(events({type: 'text', delta: 'unique-cli-'}));
+        res.end(events({type: 'text', delta: 'response'}, end));
+    }, async url => {
         const result = await cli(['--workspace', ws, '--server', url], 'first\nsecond\nexit\n');
-        assert.equal(result.code, 0, result.stderr); assert.equal(result.stdout.match(/=== answer ===/g)?.length, 2);
+        assert.equal(result.code, 0, result.stderr);
+        assert.equal(result.stdout.match(/unique-cli-response/g)?.length, 2);
+        assert.equal(requests, 2);
+        assert(!result.stdout.includes('=== answer ==='));
+        assert(result.stdout.endsWith('unique-cli-response\n\n'));
+        const single = await cli(['query', '--workspace', ws, '--server', url]);
+        assert.equal(single.code, 0, single.stderr);
+        assert.equal(single.stdout.match(/unique-cli-response/g)?.length, 1);
+        assert.equal(requests, 3);
     });
     await server((req, res) => {res.writeHead(400);res.end();}, async url => {
         assert.equal((await cli(['query', '--workspace', ws, '--server', url])).code, 1);

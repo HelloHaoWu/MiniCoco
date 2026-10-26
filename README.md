@@ -325,7 +325,7 @@ MINICOCO_TEST_REDIS_URL=redis://127.0.0.1:6379/0 bash check_realdb.sh
 
 ### 5）运行结果、取消与资源限制
 
-- `Conversation.run()` 返回 `{status, text, rounds, message?}`，状态包括 `completed`、`failed`、`exhausted`、`cancelled`。CLI 仅为正常完成打印答案，失败或耗尽返回退出码 1，取消返回 130。
+- `Conversation.run()` 返回 `{status, text, rounds, message?}`，状态包括 `completed`、`failed`、`exhausted`、`cancelled`。正文由事件消费器输出一次，正常完成后换行；CLI 不再重复打印完整答案。失败或耗尽返回退出码 1，取消返回 130。
 - `--max-rounds` 为 1—100 的整数，默认 25；最后一轮若仍要求工具则停止，不再执行该批工具。
 - 运行中按 Ctrl+C 取消当前请求或命令；客户端断连也会取消后端模型请求。macOS/Linux 会终止命令进程组；受保护的 run_command 在 Windows 明确拒绝执行。
 - 模型历史视图加当前轮最多 1 MiB JSON 或 512 条消息，v2 可压缩已提交历史；原始 transcript 不删除，无法安全压缩时明确失败；返回可执行工具批次前由后端预留结果预算，不自动删除历史中的工具调用。

@@ -97,7 +97,9 @@ async function main(): Promise<void> {
         active = new AbortController();
         try {
             const result = await convo.run(query, active.signal);
-            if (result.status === 'completed') process.stdout.write(`\n=== answer ===\n${result.text}\n\n`);
+            // The executor already renders text events for both SSE and JSON.
+            // Keep the returned text for programmatic callers, without echoing it here.
+            if (result.status === 'completed') process.stdout.write('\n\n');
             else {
                 process.stderr.write(`\n[${result.status}] ${result.message}\n`);
                 process.exitCode = result.status === 'cancelled' ? 130 : 1;

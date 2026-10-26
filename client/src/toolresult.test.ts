@@ -77,21 +77,23 @@ test('routed Native/XML and Claude-family mocks persist/resume; unknown models a
     } finally {fs.rmSync(temp, {recursive: true, force: true});}
 });
 
-test('default, explicit v1 and unregistered loop selections complete the real mock CLI', {timeout: 30_000}, async () => {
+test('default, v1, v2 and unregistered loop selections print the final answer once', {timeout: 30_000}, async () => {
     const temp = fs.mkdtempSync(path.join(os.tmpdir(), 'minicoco-loop-cli-'));
     try {
         const binary = path.join(temp, 'backend');
         const build = spawnSync('go', ['build', '-o', binary, '.'], {cwd: path.join(project, 'backend'), encoding: 'utf8'});
         assert.equal(build.status, 0, build.stderr);
-        for (const loop of ['', 'v1', 'unregistered']) {
+        for (const loop of ['', 'v1', 'v2', 'unregistered']) {
             const dir = path.join(temp, loop || 'default');fs.mkdirSync(dir);
             const workspace = path.join(dir, 'workspace');fs.mkdirSync(workspace);
             const running = await backend(binary, dir, 'mock', loop);
             try {
                 const health = await (await fetch(running.url + '/health')).json() as {loop_impl: string};
-                assert.equal(health.loop_impl, 'v1');
+                assert.equal(health.loop_impl, loop === 'v2' ? 'v2' : 'v1');
                 const result = await cli(['inspect', '--server', running.url, '--workspace', workspace, '--mode', 'readonly']);
-                assert.equal(result.code, 0, result.stderr);assert.match(result.stdout, /Done\. I inspected/);
+                assert.equal(result.code, 0, result.stderr);
+                assert.equal(result.stdout.match(/Done\. I inspected the workspace and listed its contents above\./g)?.length, 1);
+                assert(!result.stdout.includes('=== answer ==='));
                 const sid = result.stderr.match(/\[session\] (s_[a-f0-9]+)/)?.[1];assert(sid, result.stderr);
                 const info = await getSession(running.url, sid);
                 assert.equal(info.session.message_count, 4);assert.equal(info.session.total_tokens, 4);
