@@ -468,3 +468,13 @@ explore 默认使用 deepseek-flash 路由；显式 mock 模型继续离线，`L
 省略 --message 选择最后可完整分叉的 assistant。也可指定 message:N（原始已提交消息序号）；assistant:N 计入工具调用消息。工具调用与结果不会拆开，必要时前向包含结果或回退。返回 resolvedForkMessageId 和 copiedThroughMessageId 表示语义点和实际复制终点。
 
 分支独立保存，parentSessionId 为 null、forkedFrom 指向源；源 transcript 不改。历史费用留在源会话，分支用量从 0 开始；有效前缀摘要可复制。单次最多 16 MiB/10000 条，失败可能留下未发布的孤立记录；不自动重试 fork。fork 与查询互斥，创建后再用 --resume 继续。
+
+### 场景
+
+```bash
+./run_client.sh "/qa 解释这段代码" --workspace /path/to/project
+./run_client.sh "/review 检查当前模块" --workspace /path/to/project
+./run_client.sh "实现功能" --slash composer --mode safe
+```
+
+qa/review 固定只读；composer 保留 --mode，省略或未知场景回退 composer。REPL 可在每次输入前使用 /qa、/review、/composer；同一未确认轮不能切换场景。场景与 LOOP_IMPL=v1/v2 正交，不是新的执行循环或鉴权。

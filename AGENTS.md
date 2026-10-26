@@ -11,7 +11,7 @@
 - 工具增加/升级需使用 name__vN.json 与 availableVersion，更新后端注册顺序、模式策略及客户端 Handler/策略。模式必须贯穿请求、重试和执行；完整批次检查在任何本地副作用之前完成。同轮不得变更模式，默认 full 保留旧轮次指纹。模式不是鉴权或 OS 沙箱。
 - 工具结果先校验完整身份再按请求顺序格式化并落库。Native 保留旧字段/错误前缀；XML 必须转义文本并限制标签名称，按转义后的 Go JSON 最坏体积预留预算。已持久化结果的会话不得混用格式；默认 Native 指纹保持兼容。完整 prompt 调试默认关闭，仅在显式开关下输出本地 stderr，日志不得提交。
 - 模型路由集中在 models.json / models.go，提示词、formatter 与传输共用单轮快照。修改路由须同步模型能力/提示词测试和配置迁移说明；maxTokens 用于 v2 上下文估算预算，不得误用作输出 max_tokens。未知模型在创建会话前拒绝，成功轮回放不调用供应商。模型规格须查官方资料，项目配置与实际供应商能力分开描述。
-- 新单轮实现须通过 registerLoop 注册，保留 context 取消、固定 roundId 幂等、完整批次持久化后再暴露及统一失败结束边界；SSE/JSON 共用分流。空/未知 LOOP_IMPL 回退 v1，未实现的压缩能力不得宣称可用。相同 family/mode/agentType/Schema 的 system/tools 须与工作区和历史无关，追加消息不改已有前缀；诊断 hash/模拟缓存不能当作真实命中或收益证据。
+- 新单轮实现须通过 registerLoop 注册，保留 context 取消、固定 roundId 幂等、完整批次持久化后再暴露及统一失败结束边界；SSE/JSON 共用分流。空/未知 LOOP_IMPL 回退 v1，未实现的压缩能力不得宣称可用。相同 family/mode/agentType/slash/Schema 的 system/tools 须与工作区和历史无关，追加消息不改已有前缀；诊断 hash/模拟缓存不能当作真实命中或收益证据。
 - 压缩只能改变模型视图，RawLatest 保留原始幂等、工具身份和计数；保存摘要必须校验完整批次边界及源指纹，独立去重摘要 usage 并支持回写恢复，不能用 Latest 的压缩长度更新原始账本。
 - 每个 Part 达到对应行为验收要求后才标记完成；执行统一检查，区分历史验证与本次新运行结果。真实库验收使用 check_realdb.sh 并显式指定测试服务；缺少服务的 skip 不算验收通过。
 - 在本工作区，每完成一个 Part 并通过验收，检查更新两层 AGENTS、完成上层 ChangeLog 及索引后，自动提交该 Part 的相关代码和仓库内文档并推送 GitHub 一次，用户已授权，无需逐次询问。提交前检查 diff/暂存范围，只提交相关改动，核实目标分支，不强推、不自动合并 PR。如实记录提交号及推送结果。
@@ -45,7 +45,7 @@ mode 可选，省略/空串等价 full（七个工具）；readonly 仅 read_fil
 
 此处仍只实现结果呈现，未实现 XML 工具调用生成/解析。MINICOCO_DEBUG_PROMPT=1 显式输出完整 messages，可能含私密代码/用户文本，默认关闭。system/tools 在相同 family/mode 下与 workspace 无关，环境消息在 system 之后、历史之前；不表示已验证供应商缓存命中。会话元数据保存首轮模型，显式 --model 只覆盖本次调用，恢复覆盖需再次传入。
 
-LOOP_IMPL 默认/空为 v1，未注册键回退 v1；环境和 .env 支持，环境优先。生产已注册 v1/v2，v2 已实现预算、摘要和压缩重试；测试假实现为 test-v2；无用户分桶或 HTTP 注册接口。注册拒绝空/重复/空实现，读写锁保护；分流键不改变协议或旧轮次指纹，pending 重试保持实现/路由配置稳定，不表示自动数据迁移。缓存诊断 hash=SHA256(system_text+tools_json)，非完整 HTTP 请求或供应商 cache key。相同 family/mode/agentType/Schema 下，工具 JSON 字节、工作区隔离和历史前缀追加已验收；改 family/mode/Schema 可使 hash 改变。cacheHandle、命中指标持久化和真实命中率/延迟/费用尚未实现或验证。
+LOOP_IMPL 默认/空为 v1，未注册键回退 v1；环境和 .env 支持，环境优先。生产已注册 v1/v2，v2 已实现预算、摘要和压缩重试；测试假实现为 test-v2；无用户分桶或 HTTP 注册接口。注册拒绝空/重复/空实现，读写锁保护；分流键不改变协议或旧轮次指纹，pending 重试保持实现/路由配置稳定，不表示自动数据迁移。缓存诊断 hash=SHA256(system_text+tools_json)，非完整 HTTP 请求或供应商 cache key。相同 family/mode/agentType/slash/Schema 下，工具 JSON 字节、工作区隔离和历史前缀追加已验收；改 family/mode/Schema 可使 hash 改变。cacheHandle、命中指标持久化和真实命中率/延迟/费用尚未实现或验证。
 
 默认文件档 data/ 相对后端 cwd（启动脚本为 backend/data/），MINICOCO_DATA_DIR 可设绝对路径，每目录仅一个写入实例。JSONL 整文件原子替换，协调器只在进程内生效。部署须持久化数据目录。
 
@@ -59,7 +59,7 @@ Redis 提供 TTL 锁、Lua CAS 解锁、固定窗口限流和 feature_toggle 开
 
 ## 阶段与验证状态
 
-当前研发阶段：Phase 1—8 已实现并验收；下一步 Phase 9 Part 1。各 Part 的实际验证与边界见末尾分阶段记录，发布见上层 ChangeLogs。
+当前研发阶段：Phase 1—8 与 Phase 9 Part 1 已验收；下一步 Phase 9 Part 2。各 Part 验证和边界见末尾记录，发布见上层 ChangeLogs。
 
 从仓库根目录执行，默认要求 Go ≥ 1.22、Node ≥ 24：
 
@@ -140,10 +140,18 @@ check.sh 与 check_realdb.sh 均通过：默认零依赖、Go -race/vet/构建�
 
 后台进程仅在当前客户端存活；默认单次 CLI 退出会取消尚未完成任务，需要等待消费时用 --wait-background。REPL 可跨输入接收完成结果。无持久化任务队列、崩溃后任务恢复或 SIGKILL 清理保证；task_complete 是后端内部配对，不下发为可执行模型工具。后台工具审计 ok 表示启动已接受，最终完成/失败保存在后台增量中。父子 Agent 与后台任务路径独立；子 Agent 不支持后台命令。Part 1 已推送 9a3bfd7，本 Part 发布见 ChangeLog 011，下一步 Part 3 分叉；Phase 9 未实施。
 
-## 最新进度：Phase 8 完成（2026-10-26）
+## Phase 8 历史验收（2026-10-26）
 
 Phase 8 Part 3：POST /fork 与 CLI --fork --resume <sourceSid> [--message assistant:N|message:N]。按 RawLatest 的逻辑序号分叉；assistant 工具调用前向包含完整 Native/XML 结果，未配对则最多回退 50 个 assistant，无法收敛报 FORK_BOUNDARY_UNRESOLVABLE；源会话锁忙报 FORK_SESSION_BUSY。先写独立 transcript/可覆盖前缀的摘要，再发布元数据；新 session 的 parentSessionId=null、forkedFrom=源、计费用量从 0 开始，SQLite 用新增 session_fork 表兼容旧库。
 
 check.sh 和 check_realdb.sh 均通过：默认零依赖、Go -race/vet/构建、TS 类型检查、10 工具自测、66 客户端测试（9 文件）；默认覆盖率 83.2%。两档共享完整前缀、摘要复制、重开、分支继续与源历史/元数据不变测试；边界覆盖 Native/XML 前向配对和后向收敛、busy/无解；失败复制不发布半成品。真实 CLI 验证源 transcript 字节不变、fork 元数据和 --resume 独立续跑。
 
 分叉点使用原始已提交消息序号，不是物理数据库 ID；assistant:N 包含工具调用消息，message:N 为全部原始消息序号。只复制有效且完全落在前缀内的摘要检查点，旧无范围摘要不拷贝；历史供应商费用归源会话，新分支不会重记。复制上限 16 MiB/10000 条，取消/失败可能留下未发布的孤立 transcript，不修改源；没有跨库事务或 fork 自动重试。fork 本身不请求模型，与 query 互斥，创建后单独 --resume 新 ID。后台 Part 已推送 334dfef，本 Part 发布见 ChangeLog 012，下一步 Phase 9 Part 1。
+
+## 最新进度：Phase 9 Part 1（2026-10-26）
+
+Phase 9 Part 1：slash 场景注册表 composer/qa/review；省略或未知回退 composer。qa/review 后端与客户端均收窄为 readonly，composer 不扩大用户 --mode；系统提示词按 family 追加阶段给定场景原文，缺后缀文件回退族提示词。场景与 LOOP_IMPL 正交，加入非默认轮次指纹和 trace；同轮不能换场景，默认 composer 保持旧指纹。CLI 支持 /qa、/review、/composer 前缀及 --slash，REPL 每次输入可选场景。
+
+check.sh 与 check_realdb.sh 通过：默认零依赖、Go -race/vet/构建、TS 类型检查、10 工具自测、67 客户端测试（10 文件）；默认覆盖率 83.3%，真实档 82.2%。两种 loop 下五种场景输入的实际上游提示词/工具清单、两族原文、缺后缀回退、同轮换场景拒绝；客户端即使 --yes 也拦截 qa/review 写操作，新增 CLI slash 传输专项 5 项回归通过。
+
+场景按本次请求选择，不保存为会话权限；--resume 可选新场景，但未确认轮必须保持场景和增量。子 Agent 始终 readonly；场景只改变提示词/工具，不新增循环实现或鉴权。Phase 8 Part 3 已推送 919837b，本 Part 发布见 ChangeLog 013；下一步 Part 2 MCP，跨会话记忆未实施。

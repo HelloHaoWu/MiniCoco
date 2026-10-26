@@ -41,6 +41,9 @@ func initialSessionID(roundID string) string {
 }
 
 func validateDelta(req ChatRequest) error {
+	if len(req.Slash) > 64 {
+		return ErrStoreInvalid
+	}
 	if err := validateBackgroundResults(req); err != nil {
 		return err
 	}
@@ -85,6 +88,7 @@ func validateToolResults(results []ToolUseResult) error {
 }
 
 func (service *sessionService) resolve(ctx context.Context, req *ChatRequest) error {
+	normalizeScene(req)
 	creating := req.SessionID == ""
 	if creating {
 		req.SessionID = initialSessionID(req.RoundID)
@@ -204,6 +208,7 @@ func incomingMessages(req ChatRequest, history []Message, formatter Formatter) (
 }
 
 func (service *sessionService) process(ctx context.Context, req ChatRequest, emit func(Event)) error {
+	normalizeScene(&req)
 	mode, err := normalizeMode(req.Mode)
 	if err != nil {
 		return completionFailure(codeBadRequest, false, err.Error(), err)
@@ -214,6 +219,7 @@ func (service *sessionService) process(ctx context.Context, req ChatRequest, emi
 	}
 	isFunctionCall := route.IsFunctionCall
 	route.agentType = req.AgentType
+	route.scene = req.Slash
 	ctx = context.WithValue(ctx, modelRouteContextKey{}, route)
 	formatIdentity := ""
 	if !isFunctionCall {
@@ -236,7 +242,8 @@ func (service *sessionService) process(ctx context.Context, req ChatRequest, emi
 		AgentType         string             `json:",omitempty"`
 		ParentSessionID   string             `json:",omitempty"`
 		BackgroundResults []BackgroundResult `json:",omitempty"`
-	}{req.Query, req.ToolUseResults, req.Workspace, req.Model, identityMode, formatIdentity, req.AgentType, req.ParentSessionID, req.BackgroundResults})
+		Slash             string             `json:",omitempty"`
+	}{req.Query, req.ToolUseResults, req.Workspace, req.Model, identityMode, formatIdentity, req.AgentType, req.ParentSessionID, req.BackgroundResults, req.Slash})
 	hash := sha256.Sum256(encoded)
 	fingerprint := hex.EncodeToString(hash[:])
 	round, roundErr := service.transcript.Round(ctx, req.SessionID, req.RoundID)

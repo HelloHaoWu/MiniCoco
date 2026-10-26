@@ -1,3 +1,4 @@
+import {sceneFor, sceneMode, parseSceneQuery} from './scenes.ts';
 import {SUBAGENTS, SUB_MAX_ROUNDS} from './agents.ts';
 import {BackgroundTasks} from './background.ts';
 import {randomUUID, createHash} from 'node:crypto';
@@ -19,7 +20,7 @@ export interface RunResult {
     sessionId?: string;
     message?: string;
 }
-export interface ConversationOptions { mode?: ToolMode; sessionId?: string; onSession?: (id: string) => void; retryPolicy?: RetryPolicy; retryDependencies?: RetryDependencies; approvalMode?: ApprovalMode; approvalPrompt?: ApprovalPrompt; agentType?: string; parentSessionId?: string; quiet?: boolean; waitBackground?: boolean; }
+export interface ConversationOptions { mode?: ToolMode; sessionId?: string; onSession?: (id: string) => void; retryPolicy?: RetryPolicy; retryDependencies?: RetryDependencies; approvalMode?: ApprovalMode; approvalPrompt?: ApprovalPrompt; agentType?: string; parentSessionId?: string; quiet?: boolean; waitBackground?: boolean; slash?: string; }
 
 // Only session identity and an unacknowledged delta are kept here. The server
 // owns full history, budgets, input reservations and successful-round commits.
@@ -31,7 +32,9 @@ export class Conversation {
     ctx: HandlerContext;
     sessionId: string;
     private running = false;
-    private readonly mode: ToolMode;
+    private readonly baseMode: ToolMode;
+    private mode: ToolMode;
+    private slash: string;
     private options: ConversationOptions;
     private pending?: {request: RoundRequest; query: string};
     private audit: AuditClient;
@@ -51,7 +54,9 @@ export class Conversation {
         this.model = model;
         this.maxRounds = maxRounds;
         this.options = options;
-        this.mode = options.agentType ? 'readonly' : normalizeMode(options.mode);
+        this.baseMode = normalizeMode(options.mode);
+        const scene = sceneFor(options.slash);this.slash = scene === 'composer' ? '' : scene;
+        this.mode = options.agentType ? 'readonly' : sceneMode(this.baseMode, scene);
         this.sessionId = options.sessionId ?? '';
         this.ctx.delegate = async args => {
             if (this.options.agentType || !this.sessionId) throw new ToolError('subagent depth/session denied');
@@ -65,7 +70,7 @@ export class Conversation {
 
     private nextRequest(delta: {query: string} | {toolUseResults: ToolUseResult[]}): RoundRequest {
         const completed = this.background.takeCompleted();
-        return {sessionId: this.sessionId, roundId: `${this.sessionId || 'new'}-r-${randomUUID()}`, workspace: this.workspace, model: this.model, mode: this.mode, agentType: this.options.agentType, parentSessionId: this.options.parentSessionId, backgroundResults: completed.length ? completed : undefined, ...delta};
+        return {sessionId: this.sessionId, roundId: `${this.sessionId || 'new'}-r-${randomUUID()}`, workspace: this.workspace, model: this.model, mode: this.mode, slash: this.slash || undefined, agentType: this.options.agentType, parentSessionId: this.options.parentSessionId, backgroundResults: completed.length ? completed : undefined, ...delta};
     }
 
     async run(query: string, signal?: AbortSignal): Promise<RunResult> {
@@ -78,7 +83,12 @@ export class Conversation {
             if (typeof query !== 'string' || !query.trim()) throw new Error('query must be a non-empty string');
             if (Buffer.byteLength(JSON.stringify({role: 'user', content: query})) > MAX_HISTORY_BYTES) throw new Error('query exceeds conversation budget (1 MiB)');
             if (this.pending && this.pending.query !== query) throw new Error('an unacknowledged round remains; retry the same query or start a new conversation');
-            this.pending ??= {request: this.nextRequest({query}), query};
+            const selected = parseSceneQuery(query, this.options.slash);
+            if (this.pending && sceneFor(this.pending.request.slash) !== selected.scene) throw new Error('an unacknowledged round cannot change scene');
+            this.slash = selected.scene === 'composer' ? '' : selected.scene;
+            this.mode = this.options.agentType ? 'readonly' : sceneMode(this.baseMode, selected.scene);
+            this.pending ??= {request: this.nextRequest({query: selected.query}), query};
+            if (!this.options.quiet) process.stdout.write(`[scene ${selected.scene}] mode=${this.mode}\n`);
             for (rounds = 1; rounds <= this.maxRounds; rounds++) {
                 signal?.throwIfAborted();
                 if (!this.options.quiet) process.stdout.write(`\n--- round ${rounds} ---\n`);

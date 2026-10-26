@@ -131,6 +131,10 @@ test('CLI validates --mode and propagates it on every round', async () => {
             }
             const defaults = await cli(['inspect', '--workspace', workspace, '--server', url]);
             assert.equal(defaults.code, 0, defaults.stderr);assert(received.slice(-2).every(request => request.mode === 'full'));
+            for (const [query, extra, scene] of [['/qa inspect', [], 'qa'], ['inspect', ['--slash','review'], 'review']] as const) {
+                const selected = await cli([query, ...extra, '--workspace', workspace, '--server', url]);assert.equal(selected.code, 0, selected.stderr);
+                assert(received.slice(-2).every(request => request.mode === 'readonly' && request.slash === scene));
+            }
             const before = received.length;
             for (const mode of ['invalid', 'READONLY']) {
                 const rejected = await cli(['inspect', '--server', url, '--mode', mode]);

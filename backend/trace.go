@@ -17,6 +17,7 @@ type TraceRecord struct {
 	Model      string `json:"model"`
 	Provider   string `json:"provider"`
 	Family     string `json:"family"`
+	Slash      string `json:"slash,omitempty"`
 	Tool       string `json:"tool,omitempty"`
 	Usage      *Usage `json:"usage,omitempty"`
 	Code       string `json:"code,omitempty"`
@@ -54,7 +55,7 @@ func (s *sessionService) traceContext(ctx context.Context, req ChatRequest) cont
 	if effective, err := effectiveRoute(route); err == nil {
 		route = effective
 	}
-	t := &roundTrace{base: TraceRecord{TraceID: req.SessionID + "-r" + strconv.Itoa(n), SessionID: req.SessionID, RoundID: req.RoundID, Round: n, Model: req.Model, Provider: route.Provider, Family: route.Family}, last: time.Now(), emit: s.trace}
+	t := &roundTrace{base: TraceRecord{TraceID: req.SessionID + "-r" + strconv.Itoa(n), SessionID: req.SessionID, RoundID: req.RoundID, Round: n, Model: req.Model, Provider: route.Provider, Family: route.Family, Slash: sceneFor(req.Slash).Name}, last: time.Now(), emit: s.trace}
 	return context.WithValue(ctx, traceContextKey{}, t)
 }
 

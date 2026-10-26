@@ -7,10 +7,10 @@ import {normalizeMode} from './toolMode.ts';
 import type {ToolMode} from './protocol.ts';
 import {printTrace} from './trace.ts';
 
-interface Args { query: string[]; workspace: string; workspaceGiven: boolean; server: string; model: string; maxRounds: number; resume: string; list: boolean; mode: ToolMode; yes: boolean; waitBackground: boolean; fork: boolean; forkMessage: string; }
+interface Args { query: string[]; workspace: string; workspaceGiven: boolean; server: string; model: string; maxRounds: number; resume: string; list: boolean; mode: ToolMode; yes: boolean; waitBackground: boolean; fork: boolean; forkMessage: string; slash: string; }
 
 function parseArgs(argv: string[]): Args {
-    const args: Args = {query: [], workspace: process.cwd(), workspaceGiven: false, server: process.env.MINICOCO_SERVER || 'http://127.0.0.1:8017', model: '', maxRounds: 25, resume: '', list: false, mode: 'full', yes: false, waitBackground: false, fork: false, forkMessage: ''};
+    const args: Args = {query: [], workspace: process.cwd(), workspaceGiven: false, server: process.env.MINICOCO_SERVER || 'http://127.0.0.1:8017', model: '', maxRounds: 25, resume: '', list: false, mode: 'full', yes: false, waitBackground: false, fork: false, forkMessage: '', slash: ''};
     for (let i = 0; i < argv.length; i++) {
         const key = argv[i];
         if (key === '--') { args.query.push(...argv.slice(i + 1)); break; }
@@ -18,7 +18,7 @@ function parseArgs(argv: string[]): Args {
         if (key === '--list') {args.list = true;continue;}
         if (key === '--yes') {args.yes = true;continue;}
         if (key === '--wait-background') {args.waitBackground = true;continue;}
-        if (['--workspace', '--server', '--model', '--max-rounds', '--resume', '--mode', '--message'].includes(key)) {
+        if (['--workspace', '--server', '--model', '--max-rounds', '--resume', '--mode', '--message', '--slash'].includes(key)) {
             const value = argv[++i];
             if (!value || value.startsWith('--')) throw new Error(`${key} requires a value`);
             if (key === '--workspace') {args.workspace = value;args.workspaceGiven = true;}
@@ -27,6 +27,7 @@ function parseArgs(argv: string[]): Args {
             if (key === '--max-rounds') args.maxRounds = Number(value);
             if (key === '--resume') args.resume = value;
             if (key === '--message') args.forkMessage = value;
+            if (key === '--slash') args.slash = value;
             if (key === '--mode') args.mode = normalizeMode(value);
         } else if (key.startsWith('--')) throw new Error(`unknown option: ${key}`);
         else args.query.push(key);
@@ -76,8 +77,8 @@ async function main(): Promise<void> {
         if (signal?.aborted) {abort();return;}
         input.question(text, {signal}, answer => {cleanup();resolve(answer);});
     });
-    const convo = new Conversation(args.server, path.resolve(args.workspace), args.model, args.maxRounds, {mode: args.mode, sessionId: args.resume, waitBackground: args.waitBackground, approvalMode: args.yes ? 'yes' : terminal ? 'interactive' : 'deny', approvalPrompt: async (call, signal) => /^(y|yes)$/i.test((await question(`执行 ${call.name} ${JSON.stringify(call.arguments).slice(0,240)} ? [y/N] `, signal)).trim()), onSession: id => process.stderr.write(`\n[session] ${id}\n`)});
-    process.stdout.write(`MiniCoco  server=${args.server}  model=${args.model || '(backend default)'}  mode=${args.mode}  workspace=${convo.workspace}\n`);
+    const convo = new Conversation(args.server, path.resolve(args.workspace), args.model, args.maxRounds, {mode: args.mode, slash: args.slash, sessionId: args.resume, waitBackground: args.waitBackground, approvalMode: args.yes ? 'yes' : terminal ? 'interactive' : 'deny', approvalPrompt: async (call, signal) => /^(y|yes)$/i.test((await question(`执行 ${call.name} ${JSON.stringify(call.arguments).slice(0,240)} ? [y/N] `, signal)).trim()), onSession: id => process.stderr.write(`\n[session] ${id}\n`)});
+    process.stdout.write(`MiniCoco  server=${args.server}  model=${args.model || '(backend default)'}  workspace=${convo.workspace}\n`);
     let active: AbortController | undefined;
     let closed = false;
     const interrupt = (): void => {

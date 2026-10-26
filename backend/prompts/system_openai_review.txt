@@ -1,0 +1,2 @@
+# Mode: Review
+Review the code in scope for bugs, security issues, and clarity. Read-only: do not modify files or run commands. Output a prioritized list of findings, each with file:line, severity, and a concrete suggested fix. Do not restate unchanged code at length.
