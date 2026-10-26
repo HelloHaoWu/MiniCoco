@@ -59,7 +59,7 @@ Redis 提供 TTL 锁、Lua CAS 解锁、固定窗口限流和 feature_toggle 开
 
 ## 阶段与验证状态
 
-Phase 1—5 的现有 Part 均已实现并验收。本次前置基线是 Part 1 的 d3c0f5d；Part 2 发布结果见上层 ChangeLog 2026-10-26-005。实际验收与未实现边界见本文件末尾。Phase 6 尚未收到。
+Phase 1—5 的现有 Part 均已实现并验收。本次前置基线是 Part 1 的 d3c0f5d；Part 2 发布结果见上层 ChangeLog 2026-10-26-005。实际验收与未实现边界见本文件末尾。已收到 Phase 6—9 资料，依次实施。
 
 从仓库根目录执行，默认要求 Go ≥ 1.22、Node ≥ 24：
 
@@ -92,4 +92,10 @@ MINICOCO_TEST_MONGO_URI=mongodb://127.0.0.1:27017 MINICOCO_TEST_REDIS_URL=redis:
 
 Part 1 已验收并推送 d3c0f5d，见 ChangeLog 004。Part 2 本次两档完整验收通过：默认零依赖、空模块缓存/禁用下载/无 cgo、Go -race/vet/构建、TS 类型检查、10 项工具自测及 52 项客户端测试（6 文件）通过，Go 覆盖率 84.6%；真实档 -race/vet/无 cgo/驱动包含检查通过，覆盖率 83.1%。新增 6 项默认 Go 顶层压缩专项（含子用例）、真实档共享压缩持久化/重开/摘要用量恢复专项、1 项长会话真实 CLI 重启恢复测试。临时独立端口 MongoDB/Redis 已停止；未调用真实模型 API。Part 2 发布见 ChangeLog 2026-10-26-005。
 
-当前资料 Phase 1—5 共 17 个文件；Phase 1—5 现有 Part 已实施，Phase 6 未收到。未实现 OS 沙箱、跨进程工具日志/副作用 exactly-once、XML 工具调用解析、原生 Anthropic 协议或真实缓存收益验证。摘要是有损视图，语义质量尚无真实模型实测；默认文件档仍整文件重写，长期原始日志与摘要文件会增长，当前无物理日志清理。1 MiB/512 条限制应用于模型视图，已有工具结果/请求大小限制不变。
+当前资料 Phase 1—9 共 30 个 Markdown 文件；Phase 1—5 已验收，Phase 6—9 按 Part 顺序推进。未实现 OS 沙箱、跨进程工具日志/副作用 exactly-once、XML 工具调用解析、原生 Anthropic 协议或真实缓存收益验证。摘要是有损视图，语义质量尚无真实模型实测；默认文件档仍整文件重写，长期原始日志与摘要文件会增长，当前无物理日志清理。1 MiB/512 条限制应用于模型视图，已有工具结果/请求大小限制不变。
+
+## 最新进度：Phase 6 Part 1（2026-10-26）
+
+Phase 6 Part 1：trace.go 定义无正文/参数的 TraceRecord；X-Trace-Id=sessionId-r<已提交轮序>，RoundID 区分失败尝试，成功回放复用轮序并标记 replay。阶段贯通 SSE/JSON、错误 code/retryable、路由 model/provider/family；工具结果和已提交工具调用分别记录，客户端错误保留 traceId。本 Part 仅埋点，生产持久化在 Part 2。
+
+本次默认 check.sh 与真实 check_realdb.sh 均通过：Go -race/vet/构建、默认零依赖、TS 类型检查、10 项工具自测和 53 项客户端测试；真实档覆盖率 83.5%。临时服务继续供下一 Part 使用。阶段实现及发布记录见 ChangeLog 006，下一步 Phase 6 Part 2；Phase 7—9 尚未实施。

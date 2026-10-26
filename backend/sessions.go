@@ -15,6 +15,7 @@ const maxHistoryMessages = 512
 const maxToolOutputBytes = 64 * 1024
 
 type sessionService struct {
+	trace      func(TraceRecord)
 	meta       MetaStore
 	transcript TranscriptStore
 	coord      Coordinator
@@ -212,6 +213,7 @@ func (service *sessionService) process(ctx context.Context, req ChatRequest, emi
 			return completionFailure(codeBadRequest, false, "roundId reused with different input", ErrStoreConflict)
 		}
 		if round.Final {
+			traceStage(ctx, "replay", func(r *TraceRecord) { r.Replay = true })
 			for _, event := range round.Events {
 				if ctx.Err() != nil {
 					return ctx.Err()
@@ -243,6 +245,9 @@ func (service *sessionService) process(ctx context.Context, req ChatRequest, emi
 	if err != nil {
 		return completionFailure(codeBadRequest, false, err.Error(), err)
 	}
+	for _, result := range req.ToolUseResults {
+		traceStage(ctx, "tool_result", func(r *TraceRecord) { r.Tool = result.Name })
+	}
 	current := append(append([]Message{}, history...), input...)
 	v2, _ := ctx.Value(contextBudgetKey{}).(bool)
 	compressionAttempts := 0
@@ -266,6 +271,7 @@ func (service *sessionService) process(ctx context.Context, req ChatRequest, emi
 	if err != nil {
 		return err
 	}
+	traceStage(ctx, "prompt_built", nil)
 	buffer := eventBuffer{events: []Event{}}
 	usage := Usage{}
 	for {
@@ -274,6 +280,7 @@ func (service *sessionService) process(ctx context.Context, req ChatRequest, emi
 		modelCtx, cancel := context.WithCancel(ctx)
 		modelCtx = context.WithValue(modelCtx, usageContextKey{}, &usage)
 		var eventError error
+		traceStage(ctx, "llm_request", nil)
 		err = streamCompletionContext(modelCtx, messages, tools, req.Model, func(event Event) {
 			if eventError != nil {
 				return
@@ -291,6 +298,7 @@ func (service *sessionService) process(ctx context.Context, req ChatRequest, emi
 			return eventError
 		}
 		if err == nil {
+			traceStage(ctx, "llm_response", func(r *TraceRecord) { u := usage; r.Usage = &u })
 			break
 		}
 		code, _ := classifyCompletionError(err)
@@ -342,6 +350,9 @@ func (service *sessionService) process(ctx context.Context, req ChatRequest, emi
 		return storageFailure(err)
 	}
 	for _, event := range buffer.events {
+		if event.Type == EvToolCall {
+			traceStage(ctx, "tool_call", func(r *TraceRecord) { r.Tool = event.Name })
+		}
 		if v2 || (event.Type != EvText && event.Type != EvReasoning) {
 			emit(event)
 		}

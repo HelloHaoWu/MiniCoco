@@ -5,7 +5,7 @@ import {RoundError, abortError} from './roundError.ts';
 import {STREAM_TIMEOUT_MS, NONSTREAM_TIMEOUT_MS} from './tuning.ts';
 export {RoundError} from './roundError.ts';
 
-export interface RoundResult { assistant: Message; toolCalls: ToolCall[]; finish: string; sessionId?: string; }
+export interface RoundResult { assistant: Message; toolCalls: ToolCall[]; finish: string; sessionId?: string; traceId?: string; }
 export interface RoundOptions { timeoutMs?: number; onEvent?: (event: Event) => void; onSession?: (id: string) => void; }
 export interface RoundArgs extends RoundRequest { serverUrl: string; options?: RoundOptions; }
 
@@ -56,6 +56,7 @@ async function executeRound(args: RoundArgs, stream: boolean, signal?: AbortSign
     if (signal?.aborted) throw abortError(signal);
     const timeout = AbortSignal.timeout(options.timeoutMs ?? (stream ? STREAM_TIMEOUT_MS : NONSTREAM_TIMEOUT_MS));
     let response: Response | undefined;
+    let traceId: string | undefined;
     let fetching = true, printedReasoning = false;
     const render = options.onEvent ?? ((event: Event): void => {
         if (event.type === EV.REASONING && !printedReasoning) {process.stdout.write('\n\x1b[2m[thinking] ');printedReasoning = true;}
@@ -70,6 +71,8 @@ async function executeRound(args: RoundArgs, stream: boolean, signal?: AbortSign
             signal: signal ? AbortSignal.any([signal, timeout]) : timeout,
         });
         fetching = false;
+        const trace = response.headers.get('x-trace-id');
+        if (trace && /^[A-Za-z0-9_-]{1,160}$/.test(trace)) traceId = trace;
         const sessionId = response.headers.get('x-session-id') ?? '';
         if (sessionId) {
             if (!/^[A-Za-z0-9_-]{1,128}$/.test(sessionId) || (args.sessionId && sessionId !== args.sessionId)) throw new RoundError('invalid or changed session ID', 'protocol');
@@ -111,14 +114,13 @@ async function executeRound(args: RoundArgs, stream: boolean, signal?: AbortSign
             if (!envelope || typeof envelope !== 'object' || !('events' in envelope) || !Array.isArray(envelope.events)) throw new RoundError('JSON response must contain an events array', 'protocol');
             const result = await consumeEvents(envelope.events as Event[], mode);
             for (const event of envelope.events as Event[]) render(event);
-            return {...result, sessionId};
+            return {...result, sessionId, traceId};
         }
-        return {...await consumeEvents(events(), mode), sessionId};
+        return {...await consumeEvents(events(), mode), sessionId, traceId};
     } catch (cause) {
-        if (signal?.aborted) throw abortError(signal);
-        if (timeout.aborted) throw new RoundError('model request timed out', 'timeout', {cause});
-        if (cause instanceof RoundError) throw cause;
-        throw new RoundError((cause as Error).message, fetching ? 'network' : 'protocol', {cause});
+        const error = signal?.aborted ? abortError(signal) : timeout.aborted ? new RoundError('model request timed out', 'timeout', {cause}) : cause instanceof RoundError ? cause : new RoundError((cause as Error).message, fetching ? 'network' : 'protocol', {cause});
+        error.traceId = traceId;
+        throw error;
     } finally {
         if (printedReasoning) process.stdout.write('\x1b[0m\n');
         if (response?.body && !response.body.locked) await response.body.cancel().catch(() => {});

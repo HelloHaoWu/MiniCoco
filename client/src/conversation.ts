@@ -99,7 +99,7 @@ export class Conversation {
             }
             throw new Error('unreachable round state');
         } catch (error) {
-            const message = error instanceof RoundError ? `${error.code ?? error.kind}: ${error.message} after ${error.attempts ?? 1} tries` : (error as Error).message;
+            const message = error instanceof RoundError ? `${error.code ?? error.kind}: ${error.message} after ${error.attempts ?? 1} tries${error.traceId ? ` (trace ${error.traceId})` : ''}` : (error as Error).message;
             return {status: signal?.aborted ? 'cancelled' : 'failed', text: '', rounds, sessionId: this.sessionId || undefined, message};
         } finally {this.ctx.signal = undefined;this.running = false;}
     }

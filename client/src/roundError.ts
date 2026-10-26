@@ -6,6 +6,7 @@ export class RoundError extends Error {
     code?: string;
     retryable?: boolean;
     attempts?: number;
+    traceId?: string;
 
     constructor(message: string, kind: RoundErrorKind, details: {httpStatus?: number; code?: string; retryable?: boolean; cause?: unknown} = {}) {
         super(message, {cause: details.cause});

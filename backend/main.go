@@ -128,6 +128,10 @@ func handleChatStream(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	defer unlock()
+	ctx = activeSessions.traceContext(ctx, req)
+	if t, ok := ctx.Value(traceContextKey{}).(*roundTrace); ok {
+		w.Header().Set("X-Trace-Id", t.base.TraceID)
+	}
 	if req.Stream != nil && !*req.Stream {
 		writeBufferedCompletion(ctx, w, req)
 		return

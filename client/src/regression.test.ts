@@ -276,3 +276,17 @@ test('Go flaky backend recovers through one real JSON fallback and executes a to
         assert.equal(fallbacks, 1);assert(!('messages' in convo));assert.match(outcome.text, /Done\. I inspected/);
     } finally {child.kill('SIGTERM');await exit;}
 }));
+
+test('trace header survives SSE and JSON failures for diagnosis', async () => {
+    for (const stream of [true, false]) await server((_req, res) => {
+        res.setHeader('X-Trace-Id', 's_test-r3');
+        const failure: Event = {type: 'error', message: 'failed', code: 'bad_request', retryable: false};
+        res.setHeader('Content-Type', stream ? 'text/event-stream' : 'application/json');
+        res.end(stream ? events(failure) : JSON.stringify({events: [failure]}));
+    }, async url => {
+        await assert.rejects((stream ? runRound : runRoundNonStreaming)({serverUrl: url, sessionId: 's_test', roundId: 'trace', query: 'q', workspace: '/tmp', model: ''}), (error: unknown) => {
+            assert.equal((error as {traceId: string}).traceId, 's_test-r3');
+            return true;
+        });
+    });
+});

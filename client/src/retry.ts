@@ -63,6 +63,7 @@ export async function runRoundWithRetry(args: RoundArgs, policy: RetryPolicy = R
             if (classification === 'compress') {
                 const failure = new RoundError('cannot_compress: backend could not complete compression; no client history is available', 'backend', {code: 'cannot_compress', retryable: false, cause: error});
                 failure.attempts = attempts;
+                failure.traceId = error.traceId;
                 throw failure;
             }
             try {

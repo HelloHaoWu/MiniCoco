@@ -29,9 +29,18 @@ func processModelContext(ctx context.Context, messages []map[string]any, workspa
 }
 
 func processRequestContext(ctx context.Context, req ChatRequest, emit func(Event)) {
+	ctx = activeSessions.traceContext(ctx, req)
+	traceStage(ctx, "request_received", nil)
 	// Both HTTP transports enter here and select exactly one implementation.
 	if err := pickLoop()(ctx, req, emit); err != nil {
+		traceStage(ctx, "error", func(r *TraceRecord) {
+			code, retryable := classifyCompletionError(err)
+			r.Code = code
+			r.Retryable = &retryable
+		})
 		emit(failureEvent(err))
 		emit(Event{Type: EvDone, FinishReason: "error"})
+		return
 	}
+	traceStage(ctx, "sse_done", nil)
 }
