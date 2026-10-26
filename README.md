@@ -457,3 +457,14 @@ explore 默认使用 deepseek-flash 路由；显式 mock 模型继续离线，`L
 模型可将 run_command 的 `run_in_background` 设为 true；审批通过后立即收到 taskId。完成结果在同会话下一轮回灌，后端构建完整 task_complete 配对。最多 4 个未消费任务，资源限额与前台命令相同。
 
 单次 CLI 要等待后台结果可加 `--wait-background`（命令审批仍需交互或 `--yes`）；默认退出会取消尚未完成任务。REPL 可在后续输入消费结果。SIGINT/SIGTERM/正常退出清理进程组，强杀或进程崩溃不保证清理，也不会跨进程自动恢复任务。
+
+### 会话分叉
+
+```bash
+./run_client.sh --fork --resume <sourceSid> --message assistant:2
+./run_client.sh "继续分支工作" --resume <newSessionId>
+```
+
+省略 --message 选择最后可完整分叉的 assistant。也可指定 message:N（原始已提交消息序号）；assistant:N 计入工具调用消息。工具调用与结果不会拆开，必要时前向包含结果或回退。返回 resolvedForkMessageId 和 copiedThroughMessageId 表示语义点和实际复制终点。
+
+分支独立保存，parentSessionId 为 null、forkedFrom 指向源；源 transcript 不改。历史费用留在源会话，分支用量从 0 开始；有效前缀摘要可复制。单次最多 16 MiB/10000 条，失败可能留下未发布的孤立记录；不自动重试 fork。fork 与查询互斥，创建后再用 --resume 继续。

@@ -183,3 +183,23 @@ test('real CLI waits for background completion and backend injects task_complete
         finally{await running.stop();}
     }finally{upstream.closeAllConnections();await new Promise<void>(resolve=>upstream.close(()=>resolve()));fs.rmSync(temp,{recursive:true,force:true});}
 });
+
+test('CLI forks a committed assistant point, preserves source bytes and resumes the independent branch', {timeout:30_000}, async()=>{
+    const temp=fs.mkdtempSync(path.join(os.tmpdir(),'minicoco-fork-cli-'));
+    try{
+        const binary=path.join(temp,'backend');const build=spawnSync('go',['build','-o',binary,'.'],{cwd:path.join(project,'backend'),encoding:'utf8'});assert.equal(build.status,0,build.stderr);
+        const ws=path.join(temp,'workspace');fs.mkdirSync(ws);const running=await backend(binary,temp,'mock');
+        try{
+            const initial=await cli(['first','--workspace',ws,'--server',running.url]);assert.equal(initial.code,0,initial.stderr);
+            const source=(await listSessions(running.url))[0];
+            for(const query of ['second','third'])assert.equal((await cli([query,'--resume',source.id,'--server',running.url])).code,0);
+            const sourceFile=path.join(temp,'data/transcripts',source.id+'.jsonl');const before=fs.readFileSync(sourceFile);
+            const fork=await cli(['--fork','--resume',source.id,'--message','assistant:2','--server',running.url]);assert.equal(fork.code,0,fork.stderr);
+            const result=JSON.parse(fork.stdout);assert.equal(result.resolvedForkMessageId,'message:4');assert.deepEqual(fs.readFileSync(sourceFile),before);
+            const child=(await getSession(running.url,result.newSessionId)).session;assert.equal(child.parentSessionId,null);assert.equal(child.forkedFrom,source.id);assert.equal(child.message_count,4);assert.equal(child.total_tokens,0);
+            assert.equal((await cli(['branch work','--resume',child.id,'--server',running.url])).code,0);
+            assert.equal((await getSession(running.url,child.id)).session.message_count,8);assert.deepEqual(fs.readFileSync(sourceFile),before);
+            assert.notEqual((await cli(['query','--fork','--resume',source.id,'--server',running.url])).code,0);
+        }finally{await running.stop();}
+    }finally{fs.rmSync(temp,{recursive:true,force:true});}
+});

@@ -10,6 +10,7 @@ import (
 type Session struct {
 	ParentSessionID  *string `json:"parentSessionId"`
 	AgentType        string  `json:"agentType,omitempty"`
+	ForkedFrom       string  `json:"forkedFrom,omitempty"`
 	ID               string  `json:"id"`
 	User             string  `json:"user"`
 	Model            string  `json:"model"`

@@ -1,23 +1,24 @@
 import * as path from 'node:path';
 import * as readline from 'node:readline';
 import {Conversation} from './conversation.ts';
-import {getSession, listSessions} from './sessions.ts';
+import {getSession, listSessions, forkSession} from './sessions.ts';
 import {realpathSync} from 'node:fs';
 import {normalizeMode} from './toolMode.ts';
 import type {ToolMode} from './protocol.ts';
 import {printTrace} from './trace.ts';
 
-interface Args { query: string[]; workspace: string; workspaceGiven: boolean; server: string; model: string; maxRounds: number; resume: string; list: boolean; mode: ToolMode; yes: boolean; waitBackground: boolean; }
+interface Args { query: string[]; workspace: string; workspaceGiven: boolean; server: string; model: string; maxRounds: number; resume: string; list: boolean; mode: ToolMode; yes: boolean; waitBackground: boolean; fork: boolean; forkMessage: string; }
 
 function parseArgs(argv: string[]): Args {
-    const args: Args = {query: [], workspace: process.cwd(), workspaceGiven: false, server: process.env.MINICOCO_SERVER || 'http://127.0.0.1:8017', model: '', maxRounds: 25, resume: '', list: false, mode: 'full', yes: false, waitBackground: false};
+    const args: Args = {query: [], workspace: process.cwd(), workspaceGiven: false, server: process.env.MINICOCO_SERVER || 'http://127.0.0.1:8017', model: '', maxRounds: 25, resume: '', list: false, mode: 'full', yes: false, waitBackground: false, fork: false, forkMessage: ''};
     for (let i = 0; i < argv.length; i++) {
         const key = argv[i];
         if (key === '--') { args.query.push(...argv.slice(i + 1)); break; }
+        if (key === '--fork') {args.fork = true;continue;}
         if (key === '--list') {args.list = true;continue;}
         if (key === '--yes') {args.yes = true;continue;}
         if (key === '--wait-background') {args.waitBackground = true;continue;}
-        if (['--workspace', '--server', '--model', '--max-rounds', '--resume', '--mode'].includes(key)) {
+        if (['--workspace', '--server', '--model', '--max-rounds', '--resume', '--mode', '--message'].includes(key)) {
             const value = argv[++i];
             if (!value || value.startsWith('--')) throw new Error(`${key} requires a value`);
             if (key === '--workspace') {args.workspace = value;args.workspaceGiven = true;}
@@ -25,6 +26,7 @@ function parseArgs(argv: string[]): Args {
             if (key === '--model') args.model = value;
             if (key === '--max-rounds') args.maxRounds = Number(value);
             if (key === '--resume') args.resume = value;
+            if (key === '--message') args.forkMessage = value;
             if (key === '--mode') args.mode = normalizeMode(value);
         } else if (key.startsWith('--')) throw new Error(`unknown option: ${key}`);
         else args.query.push(key);
@@ -40,6 +42,12 @@ async function main(): Promise<void> {
         await printTrace(server,sid,round);return;
     }
     const args = parseArgs(process.argv.slice(2));
+    if (args.forkMessage && !args.fork) throw new Error('--message requires --fork');
+    if (args.fork) {
+        if (!args.resume || args.query.length || args.list || args.workspaceGiven || args.model) throw new Error('--fork requires --resume <sourceSid> and cannot include a query/workspace/model/list');
+        const result = await forkSession(args.server,args.resume,args.forkMessage || undefined);
+        process.stdout.write(JSON.stringify(result) + '\n');return;
+    }
     if (args.list) {
         if (args.resume || args.query.length) throw new Error('--list cannot be combined with --resume or a query');
         const sessions = await listSessions(args.server);

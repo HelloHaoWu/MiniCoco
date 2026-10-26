@@ -626,3 +626,5 @@ func TestRealCompressionPersistence(t *testing.T) { runCompressionPersistence(t,
 func TestRealSubagentPersistence(t *testing.T) { runSubagentPersistence(t, realContractFactory) }
 
 func TestRealBackgroundPersistence(t *testing.T) { runBackgroundPersistence(t, realContractFactory) }
+
+func TestRealForkPersistence(t *testing.T) { runForkPersistence(t, realContractFactory) }

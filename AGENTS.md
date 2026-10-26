@@ -59,7 +59,7 @@ Redis 提供 TTL 锁、Lua CAS 解锁、固定窗口限流和 feature_toggle 开
 
 ## 阶段与验证状态
 
-Phase 1—5 的现有 Part 均已实现并验收。本次前置基线是 Part 1 的 d3c0f5d；Part 2 发布结果见上层 ChangeLog 2026-10-26-005。实际验收与未实现边界见本文件末尾。已收到 Phase 6—9 资料，依次实施。
+当前研发阶段：Phase 1—8 已实现并验收；下一步 Phase 9 Part 1。各 Part 的实际验证与边界见末尾分阶段记录，发布见上层 ChangeLogs。
 
 从仓库根目录执行，默认要求 Go ≥ 1.22、Node ≥ 24：
 
@@ -132,10 +132,18 @@ Phase 8 Part 1：delegate_subagent__v1 工具及 explore 注册表，后端注�
 
 full 七个工具，safe 排除 run_command、允许只读委派；readonly 仍只有 read/list/grep，子 Agent 不能继续委派。多个委派当前顺序执行，未实现并发子 Agent 调度。子中间步骤仅写子 transcript，不进入父历史；子失败/取消无副作用回滚。新增 run_command__v2 仅修正 Phase 7 后资源说明，参数兼容；后台任务尚未实现。无真实模型 API。Phase 7 Part 2 已推送 fd9cf37，本 Part 发布见 ChangeLog 010，下一步 Phase 8 Part 2；Phase 9 未实施。
 
-## 最新进度：Phase 8 Part 2（2026-10-26）
+## Phase 8 Part 2 历史验收（2026-10-26）
 
 Phase 8 Part 2：run_command__v3 增加 run_in_background；客户端 BackgroundTasks 在同一 Conversation 中启动任务，立即返回随机 UUID taskId，最多 4 个未消费任务，复用审批、RSS/超时/输出保护。完成结果 backgroundResults 携带到下一轮增量；后端校验并构建完整 task_complete/ack 配对（Native/XML），与原输入原子预占、成功提交、重试回放。客户端快照深拷贝后台增量，成功重试不重跑命令。--wait-background 等待并消费结果，取消、SIGINT/SIGTERM 和 close 清理进程组。
 
 check.sh 与 check_realdb.sh 均通过：默认零依赖、Go -race/vet/构建、TS 类型检查、10 工具自测、65 客户端测试（9 文件）。新增队列限额/立即返回/消费一次、同 session 后台结果不变重试与命令单次执行、退出后无延迟写文件；file/real 的 Native/XML 完整配对、重开回放和用量去重；真实 Go+CLI+模拟上游验证 --wait-background 后模型收到 background 和 task_complete。
 
 后台进程仅在当前客户端存活；默认单次 CLI 退出会取消尚未完成任务，需要等待消费时用 --wait-background。REPL 可跨输入接收完成结果。无持久化任务队列、崩溃后任务恢复或 SIGKILL 清理保证；task_complete 是后端内部配对，不下发为可执行模型工具。后台工具审计 ok 表示启动已接受，最终完成/失败保存在后台增量中。父子 Agent 与后台任务路径独立；子 Agent 不支持后台命令。Part 1 已推送 9a3bfd7，本 Part 发布见 ChangeLog 011，下一步 Part 3 分叉；Phase 9 未实施。
+
+## 最新进度：Phase 8 完成（2026-10-26）
+
+Phase 8 Part 3：POST /fork 与 CLI --fork --resume <sourceSid> [--message assistant:N|message:N]。按 RawLatest 的逻辑序号分叉；assistant 工具调用前向包含完整 Native/XML 结果，未配对则最多回退 50 个 assistant，无法收敛报 FORK_BOUNDARY_UNRESOLVABLE；源会话锁忙报 FORK_SESSION_BUSY。先写独立 transcript/可覆盖前缀的摘要，再发布元数据；新 session 的 parentSessionId=null、forkedFrom=源、计费用量从 0 开始，SQLite 用新增 session_fork 表兼容旧库。
+
+check.sh 和 check_realdb.sh 均通过：默认零依赖、Go -race/vet/构建、TS 类型检查、10 工具自测、66 客户端测试（9 文件）；默认覆盖率 83.2%。两档共享完整前缀、摘要复制、重开、分支继续与源历史/元数据不变测试；边界覆盖 Native/XML 前向配对和后向收敛、busy/无解；失败复制不发布半成品。真实 CLI 验证源 transcript 字节不变、fork 元数据和 --resume 独立续跑。
+
+分叉点使用原始已提交消息序号，不是物理数据库 ID；assistant:N 包含工具调用消息，message:N 为全部原始消息序号。只复制有效且完全落在前缀内的摘要检查点，旧无范围摘要不拷贝；历史供应商费用归源会话，新分支不会重记。复制上限 16 MiB/10000 条，取消/失败可能留下未发布的孤立 transcript，不修改源；没有跨库事务或 fork 自动重试。fork 本身不请求模型，与 query 互斥，创建后单独 --resume 新 ID。后台 Part 已推送 334dfef，本 Part 发布见 ChangeLog 012，下一步 Phase 9 Part 1。

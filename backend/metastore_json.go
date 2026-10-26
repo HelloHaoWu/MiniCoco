@@ -72,6 +72,9 @@ func NewJSONMetaStore(dataDir string) (*JSONMetaStore, error) {
 }
 
 func validSession(s Session) bool {
+	if s.ForkedFrom != "" && !validSessionID(s.ForkedFrom) {
+		return false
+	}
 	if (s.AgentType == "") != (s.ParentSessionID == nil) {
 		return false
 	}

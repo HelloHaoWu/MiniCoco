@@ -63,7 +63,7 @@ export interface RoundRequest {
     mode?: ToolMode;
 }
 export interface Session {
-    parentSessionId?: string | null; agentType?: string;
+    parentSessionId?: string | null; agentType?: string; forkedFrom?: string;
     id: string; user: string; model: string; workspace: string; created_at: number;
     ended: boolean; prompt_tokens: number; completion_tokens: number; total_tokens: number;
     message_count: number; last_message_count: number;
