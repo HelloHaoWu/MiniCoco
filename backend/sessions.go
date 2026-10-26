@@ -41,7 +41,7 @@ func validateDelta(req ChatRequest) error {
 	if _, err := normalizeMode(req.Mode); err != nil {
 		return err
 	}
-	if req.RoundID == "" || len(req.RoundID) > 256 || len(req.Model) > 256 || len(req.Workspace) > 4096 || (req.SessionID != "" && !validSessionID(req.SessionID)) {
+	if strings.ContainsRune(req.RoundID, 0) || req.RoundID == "" || len(req.RoundID) > 256 || len(req.Model) > 256 || len(req.Workspace) > 4096 || (req.SessionID != "" && !validSessionID(req.SessionID)) {
 		return ErrStoreInvalid
 	}
 	if (req.Query != nil) == (req.ToolUseResults != nil) {
@@ -118,6 +118,25 @@ func (service *sessionService) reconcile(ctx context.Context, sid string) error 
 			return err
 		}
 	}
+	raw, err := service.transcript.RawLatest(ctx, sid, allHistory)
+	if err != nil {
+		return err
+	}
+	summaries, err := service.transcript.Summaries(ctx, sid)
+	if err != nil {
+		return err
+	}
+	if _, err := activeSummary(summaries, raw); err != nil {
+		return err
+	}
+	for _, summary := range summaries {
+		if summary.UsageID != "" {
+			if err := service.meta.CommitRoundUsage(ctx, sid, summary.UsageID, summary.Usage, summary.PrefixCount); err != nil {
+				return err
+			}
+		}
+	}
+
 	return nil
 }
 
@@ -151,9 +170,6 @@ func incomingMessages(req ChatRequest, history []Message, formatter Formatter) (
 	}
 	return genToolResults(req.ToolUseResults, calls, formatter)
 }
-
-// The Phase 5 seam is intentionally empty; it does not drop any history.
-func compressSeam(ctx context.Context, session Session) error { return ctx.Err() }
 
 func (service *sessionService) process(ctx context.Context, req ChatRequest, emit func(Event)) error {
 	mode, err := normalizeMode(req.Mode)
@@ -205,49 +221,41 @@ func (service *sessionService) process(ctx context.Context, req ChatRequest, emi
 			return nil
 		}
 	}
-	history, err := service.transcript.Latest(ctx, req.SessionID, maxHistoryMessages+1)
+	rawHistory, err := service.transcript.RawLatest(ctx, req.SessionID, allHistory)
 	if err != nil {
 		return storageFailure(err)
 	}
-	if roundErr == nil && round.BaseCount != len(history) {
+	history, err := service.transcript.Latest(ctx, req.SessionID, allHistory)
+	if err != nil {
+		return storageFailure(err)
+	}
+	if roundErr == nil && round.BaseCount != len(rawHistory) {
 		return completionFailure(codeBadRequest, false, "unfinished round is stale; use a new roundId", ErrStoreConflict)
 	}
 	wantFormat := "native"
 	if !isFunctionCall {
 		wantFormat = "xml"
 	}
-	if previous := historyToolFormat(history); previous != "" && previous != wantFormat {
+	if previous := historyToolFormat(rawHistory); previous != "" && previous != wantFormat {
 		return completionFailure(codeBadRequest, false, "session tool result format differs; restore its capability setting or start a new session", nil)
 	}
-	input, err := incomingMessages(req, history, pickFormatter(isFunctionCall))
+	input, err := incomingMessages(req, rawHistory, pickFormatter(isFunctionCall))
 	if err != nil {
 		return completionFailure(codeBadRequest, false, err.Error(), err)
 	}
-	if flag, _ := service.coord.Flag(ctx, "flag:compress_enabled"); flag == "1" {
-		session, err := service.meta.GetSession(ctx, req.SessionID)
-		if err != nil {
-			return storageFailure(err)
-		}
-		if session.MessageCount >= maxHistoryMessages {
-			if err := compressSeam(ctx, session); err != nil {
-				return err
-			}
-		}
-	}
 	current := append(append([]Message{}, history...), input...)
-	if err := historyBudget(current); err != nil {
-		return completionFailure(codeBadRequest, false, err.Error(), err)
-	}
-	if enabled, _ := ctx.Value(contextBudgetKey{}).(bool); enabled {
-		budget, err := budgetFor(current, req.Workspace, mode, route)
+	v2, _ := ctx.Value(contextBudgetKey{}).(bool)
+	compressionAttempts := 0
+	if v2 {
+		current, err = service.prepareContext(ctx, req, route, mode, current, rawHistory, input, &compressionAttempts)
 		if err != nil {
 			return err
 		}
-		if budget.Mode != compactNone {
-			return completionFailure(codeNeedCompression, true, "context requires "+string(budget.Mode)+" compression", nil)
-		}
 	}
-	if _, err := service.transcript.ReserveRound(ctx, req.SessionID, req.RoundID, fingerprint, input, len(history)); err != nil {
+	if err := historyBudget(current); err != nil {
+		return completionFailure(codeBadRequest, false, err.Error(), err)
+	}
+	if _, err := service.transcript.ReserveRound(ctx, req.SessionID, req.RoundID, fingerprint, input, len(rawHistory)); err != nil {
 		return storageFailure(err)
 	}
 	messages := make([]map[string]any, len(current))
@@ -259,28 +267,51 @@ func (service *sessionService) process(ctx context.Context, req ChatRequest, emi
 		return err
 	}
 	buffer := eventBuffer{events: []Event{}}
-	modelCtx, cancel := context.WithCancel(ctx)
-	defer cancel()
 	usage := Usage{}
-	modelCtx = context.WithValue(modelCtx, usageContextKey{}, &usage)
-	var eventError error
-	err = streamCompletionContext(modelCtx, messages, tools, req.Model, func(event Event) {
+	for {
+		buffer = eventBuffer{events: []Event{}}
+		usage = Usage{}
+		modelCtx, cancel := context.WithCancel(ctx)
+		modelCtx = context.WithValue(modelCtx, usageContextKey{}, &usage)
+		var eventError error
+		err = streamCompletionContext(modelCtx, messages, tools, req.Model, func(event Event) {
+			if eventError != nil {
+				return
+			}
+			if eventError = buffer.append(event); eventError != nil {
+				cancel()
+				return
+			}
+			if !v2 && (event.Type == EvText || event.Type == EvReasoning) {
+				emit(event)
+			}
+		})
+		cancel()
 		if eventError != nil {
-			return
+			return eventError
 		}
-		if eventError = buffer.append(event); eventError != nil {
-			cancel()
-			return
+		if err == nil {
+			break
 		}
-		if event.Type == EvText || event.Type == EvReasoning {
-			emit(event)
+		code, _ := classifyCompletionError(err)
+		if !v2 || code != codeNeedCompression {
+			return err
 		}
-	})
-	if eventError != nil {
-		return eventError
-	}
-	if err != nil {
-		return err
+		current, err = service.compactContext(ctx, req, route, mode, current, rawHistory, input, compactFull, &compressionAttempts)
+		if err != nil {
+			return err
+		}
+		if err := historyBudget(current); err != nil {
+			return cannotCompress(err.Error())
+		}
+		promptHistory := make([]map[string]any, len(current))
+		for i, m := range current {
+			promptHistory[i] = m
+		}
+		messages, tools, err = genPrompt(promptHistory, req.Workspace, mode, route)
+		if err != nil {
+			return err
+		}
 	}
 	if err := ctx.Err(); err != nil {
 		return err
@@ -307,11 +338,11 @@ func (service *sessionService) process(ctx context.Context, req ChatRequest, emi
 		return storageFailure(err)
 	}
 	// Transcript commit is authoritative. Replay repairs interrupted metadata writes.
-	if err := service.meta.CommitRoundUsage(context.WithoutCancel(ctx), req.SessionID, req.RoundID, usage, len(next)); err != nil {
+	if err := service.meta.CommitRoundUsage(context.WithoutCancel(ctx), req.SessionID, req.RoundID, usage, len(rawHistory)+len(input)+1); err != nil {
 		return storageFailure(err)
 	}
 	for _, event := range buffer.events {
-		if event.Type != EvText && event.Type != EvReasoning {
+		if v2 || (event.Type != EvText && event.Type != EvReasoning) {
 			emit(event)
 		}
 	}

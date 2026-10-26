@@ -161,7 +161,7 @@ func runStoreContract(t *testing.T, factory contractFactory) {
 		if err := stores.transcript.Append(ctx, "../outside", "r", input); !errors.Is(err, ErrStoreInvalid) {
 			t.Fatal("unsafe SID accepted")
 		}
-		if err := stores.transcript.SaveSummary(ctx, "s_transcript", Summary{"first", id, "summary\n中文"}); err != nil {
+		if err := stores.transcript.SaveSummary(ctx, "s_transcript", Summary{OriginStartID: "first", OriginEndID: id, Content: "summary\n中文"}); err != nil {
 			t.Fatal(err)
 		}
 	})

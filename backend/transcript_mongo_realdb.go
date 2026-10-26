@@ -217,7 +217,7 @@ func (store *MongoTranscriptStore) documents(ctx context.Context, sid string) ([
 	return result, err
 }
 
-func (store *MongoTranscriptStore) Latest(ctx context.Context, sid string, n int) ([]Message, error) {
+func (store *MongoTranscriptStore) RawLatest(ctx context.Context, sid string, n int) ([]Message, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
@@ -257,13 +257,24 @@ func (store *MongoTranscriptStore) Latest(ctx context.Context, sid string, n int
 }
 
 func (store *MongoTranscriptStore) SaveSummary(ctx context.Context, sid string, summary Summary) error {
+	raw, err := store.RawLatest(ctx, sid, allHistory)
+	if err != nil {
+		return err
+	}
+	if err := validateSummary(summary, raw); err != nil {
+		return err
+	}
 	if err := ctx.Err(); err != nil {
 		return err
 	}
 	if !validSessionID(sid) || summary.OriginStartID == "" || summary.OriginEndID == "" || strings.TrimSpace(summary.Content) == "" {
 		return ErrStoreInvalid
 	}
-	_, err := store.summaries.InsertOne(ctx, bson.M{"sessionId": sid, "originStartId": summary.OriginStartID, "originEndId": summary.OriginEndID, "content": summary.Content, "ts": time.Now().UnixMilli()})
+	data, err := json.Marshal(summary)
+	if err != nil {
+		return err
+	}
+	_, err = store.summaries.InsertOne(ctx, bson.M{"checkpointJson": data, "sessionId": sid, "originStartId": summary.OriginStartID, "originEndId": summary.OriginEndID, "content": summary.Content, "ts": time.Now().UnixMilli()})
 	return err
 }
 

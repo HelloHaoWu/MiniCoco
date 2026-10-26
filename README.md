@@ -126,7 +126,7 @@ MINICOCO_MODELS_FILE=/absolute/path/models.json LLM_MODEL=my-model LLM_BASE_URL=
 
 `backend/loop_registry.go` 定义统一的 `LoopImpl(context.Context, ChatRequest, emit) error`，保留 HTTP 请求的取消和超时。注册 `v1` 与预算版 `v2`，默认仍为 `v1`，直接进入现有持久化单轮服务；SSE 和 JSON 都在共享入口 `processRequestContext` 中选择一次实现，错误仍走同一分类和结束事件。`LOOP_IMPL` 可通过环境或本地 .env 设置，已导出环境优先；空值/省略选择 v1，未注册名称也按阶段设计回退到 v1。启动日志及 `GET /health` 的 `loop_impl` 显示实际选择，便于发现回退。
 
-`registerLoop` 为后端代码扩展点，拒绝空名、空实现和重复注册，读写锁保护注册与选择。后续压缩版可注册为 v2，再由环境切换；**当前 v2 先实现 Phase 5 Part 1 的预算/触发，摘要压缩待 Part 2；无用户哈希分桶**，测试里的 v2 是临时假实现。新增实现必须遵守同一单轮持久化/幂等、取消和完整工具批次提交边界；分流键不进入客户端协议或轮次指纹，既有 v1 成功轮保持回放兼容。实现切换不应改变已经提交的轮次；pending 重试期间保持实现和路由配置稳定，不能将这个钩子理解为自动跨版本数据迁移。
+`registerLoop` 为后端代码扩展点，拒绝空名、空实现和重复注册，读写锁保护注册与选择。生产 v2 已实现 Phase 5 的预算、摘要和压缩重试，由环境切换；无用户哈希分桶，测试假实现使用 test-v2。新增实现必须遵守同一单轮持久化/幂等、取消和完整工具批次提交边界；分流键不进入客户端协议或轮次指纹，既有 v1 成功轮保持回放兼容。实现切换不应改变已经提交的轮次；pending 重试期间保持实现和路由配置稳定，不能将这个钩子理解为自动跨版本数据迁移。
 
 ```bash
 LOOP_IMPL=v1 LLM_PROVIDER=mock bash run_backend.sh
@@ -170,7 +170,7 @@ LLM_PROVIDER=mock LLM_MOCK_MODE=flaky LLM_MOCK_FLAKY_FAILS=2 bash run_backend.sh
 **本兜底改变客户端到后端的返回方式，上游模型仍复用原有流式管线**，用于下游传输恢复，不承诺修复所有上游流式故障。
 JSON 返回同样限制为 4 MiB，单事件不超过 1 MiB，完整验证通过后才执行工具。
 
-历史预算和预占/提交边界已迁到后端；客户端不再压缩或上传历史。后端保留 Phase 5 的 `compressSeam` 空接缝，当前不提供压缩算法。遇到 `need_compression` 明确以 `cannot_compress` 结束，不盲目重发或触发兜底；后续应在持有历史的后端实现压缩。
+历史预算和预占/提交边界已迁到后端；客户端不再压缩或上传历史。LOOP_IMPL=v2 在后端主动/反应式压缩并内部重试，最多 3 次压缩/trim；不能缩短时 cannot_compress，不走 JSON 兜底。v1 不自动压缩，客户端没有历史可自行压缩。
 
 错误 SSE 事件增加 `code`、`retryable`；`retryable:false` 会显式输出，随后仍发 `done(error)`：
 
@@ -191,7 +191,7 @@ JSON 返回同样限制为 4 MiB，单事件不超过 1 MiB，完整验证通过
 | 协议/资源限制错误、未知内部错误、用户取消 | `internal` | false |
 
 分类基于 HTTP 状态、已知配额/上下文错误信号和错误来源；单独出现 `quota` 一词不会把可恢复的请求速率限制判成余额耗尽。
-压缩仅提供反应式错误信号，本阶段没有实现压缩算法；旧客户端可忽略新增字段，其他事件格式不变。
+Phase 5 已为 v2 实现摘要压缩；客户端提交协议/事件格式不变，后端处理内部上下文重试。
 
 ### 2) 接真实模型 (任意 OpenAI 兼容端点)
 
@@ -255,7 +255,7 @@ bash check.sh
 - 工具轮发送 toolUseResults: [{id,name,output,isError}]，必须完整匹配上一批工具的 ID 和名称，输出按后端 Go JSON 编码（包括 HTML/Unicode 分隔符转义）每项不超过 64 KiB，客户端工具也按同一口径截断。工作区绑定会话，不允许静默换目录。
 - 一次原子替换写入输入与 pending，成功后追加相同消息 ID 的 final，并记录成功事件序列和 usage。Latest 不暴露失败轮输入/pending；重试复用预占，成功轮重复请求直接回放事件，不调用模型、不增加正文或用量。同会话并发请求返回 425，客户端按瞬时故障退避。
 - token 来自供应商返回的 usage；未返回时为 0，不做估算。mock 每个成功轮使用合成的 1 prompt / 1 completion / 2 total 计数，仅供测试。元数据按 roundId 去重，并在请求/列表读取时从已提交 transcript 修复中断的回写；这些是成功轮统计，不代表供应商全部计费（失败请求也可能收费）。
-- JSONL 逻辑追加通过整文件原子替换提交，适合当前小规模默认档；无跨文件事务，使用 transcript final 与元数据 round 账本进行恢复。协调器提供进程内 TTL 租约、固定窗口限流、显式 flags 优先于同名环境变量和单机广播空实现。摘要只写入独立 summary.jsonl，尚不合并或压缩。
+- JSONL 逻辑追加通过整文件原子替换提交，适合当前小规模默认档；无跨文件事务，使用 transcript final 与元数据 round 账本进行恢复。协调器提供进程内 TTL 租约、固定窗口限流、显式 flags 优先于同名环境变量和单机广播空实现。摘要写入独立 summary.jsonl；带校验检查点的摘要由 Latest 合并，旧无检查点摘要仍仅保存。
 
 自测与续会话：
 
@@ -388,7 +388,7 @@ MiniCoco/
 
 - **历史放后端**：服务端从持久化 transcript 读取历史，客户端只提交增量；三个接口分离元数据、正文与协调。默认 JSON/JSONL/进程内实现便于离线运行，可选 SQLite/MongoDB/Redis 档保留同样的轮次和去重语义。
 - **原生 function calling**：直接用模型的 `tools` / `tool_calls`。真实前后端设计 还支持 XML 风格工具协议、prompt cache、ABTest 分流等。
-- **逐步完善实现**：已实现模型请求重试、一次性 JSON 兜底、会话持久化/恢复、可选真实库档、工具版本/模式、Native/XML 结果回填、按模型名路由/模型族提示词、单轮实现注册与静态前缀验收；尚未实现 XML 工具调用解析、按任务自动选模、上下文压缩算法、tracing、权限审批、memory、subagent / MCP。使用明确的预算和失败状态控制基本边界。
+- **逐步完善实现**：已实现模型请求重试、一次性 JSON 兜底、会话持久化/恢复、可选真实库档、工具版本/模式、Native/XML 结果回填、按模型名路由/模型族提示词、单轮实现注册、静态前缀验收和可选 v2 上下文工程；尚未实现 XML 工具调用解析、按任务自动选模、tracing、权限审批、memory、subagent / MCP。使用明确的预算和失败状态控制基本边界。
 - **工具集**：保留 6 个核心工具。新增工具时提供带版本/元数据的 JSON，更新后端 ToolName、固定顺序与模式策略，并在客户端增加 Handler、注册表和模式策略，补齐两端回归；仅放一个 JSON 不会自动开放执行。
 - **语言**：真实后端是 Java；这里用 Go 保持「编译型、单二进制、无框架」的最小形态，前端沿用 TypeScript。
 
@@ -398,6 +398,27 @@ MiniCoco/
 - 文件工具拒绝路径越界和路径中的符号链接，写入通过同目录临时文件替换完成。这是应用层路径检查，不能抵御其他进程并发恶意替换父目录。
 - `run_command` 提供可信本地 shell 执行能力，`--workspace` 只设置它的工作目录，**不限制它访问工作区以外的文件或网络**。当前没有容器或操作系统级沙箱。
 
-## Phase 5 Part 1：上下文预算
 
-LOOP_IMPL=v2 启用 Go 后端估算预算：文本按 UTF-16 字符/2 向上估算，工具调用参数/身份也计入；base64 图片按 len*2/3000 向上估算（仅估算器支持，HTTP/存储仍仅文本协议）。model.maxTokens 扣除 system/tools/环境后为历史额度；严格 >0.65 micro，>0.80 full，在请求模型前返回 need_compression。真实摘要由 Part 2 接续。trimToBudget 只生成视图，保留尾部且不拆工具批次；尾部文本可截断，工具批次本身放不下则 cannot_compress。启发估算不等于供应商 tokenizer，1 MiB/512 条原有限制仍在。
+## Phase 5：上下文预算、压缩与摘要
+
+- context_budget.go 以 UTF-16 字符/2 向上估算文本、工具调用/ID；图片 base64 估算仅是估算器能力，HTTP/存储仍为文本协议。maxTokens 扣除 system/tools/环境后为历史额度，>0.65 micro、>0.80 full；这是启发预算，不是供应商 tokenizer 或输出 max_tokens。
+- LOOP_IMPL=v2 启用 compression.go，v1 保留不自动压缩的基线；两者均可读取已存在的摘要视图。主动预算与上游 need_compression 共用 compactContext，每个后端请求最多 3 次压缩/trim 尝试；新 query 保最后 user，工具轮保最后完整 Native/XML 批次。范围至少替换 3 条为两条摘要前缀，要求消息数和估算 token 都严格下降；缩不动或受保护工具块放不下明确 cannot_compress。
+- micro 压最旧的小段，full 压尾段前历史。summarize 对真实兼容端点发无工具摘要请求，要求保留决策/路径/未决事项/结论；mock 用确定性占位，摘要不超过 8 KiB。摘要请求自身超限、摘要锁不可用或全局 rate:summary（1/10s）拒绝时只生成安全 trim 视图；取消贯穿请求，不提交不完整模型轮次。
+- context_history.go / context_history_realdb.go：TranscriptStore 增加 RawLatest/Summaries，Latest 返回 user 占位+assistant 摘要+未压段。Summary 通过 PrefixCount 和 PrefixHash 校验不可变原始前缀；originStartId/EndId 是跨存储通用的逻辑消息序号。旧无 checkpoint 的摘要保持只保存、不自动合并。RawLatest 决定 pending stale、工具身份、恢复安全及 MessageCount，不能拿压缩后的长度当账本计数；原始正文与成功事件不删除，压缩不减少磁盘存储。
+- 摘要保存成功后其真实 usage 以独立内部账本 ID 去重提交；reconcile 可恢复摘要已写但 meta 未回写的情况。NUL 前缀为内部摘要用量域，用户 roundId 拒绝 NUL，防止账本碰撞。失败供应商请求可能仍产生未统计费用。mock 摘要 usage=0，普通 mock 轮仍为 1/1/2。
+- v2 对每次模型尝试暂存全部事件，成功持久化后统一发出，SSE 不再逐 token 实时显示；避免失败文本混入压缩重试结果。v1 保持原流式输出，客户端只提交原增量，不重跑工具；v1 收到 need_compression 时仍明确终止，客户端没有历史可自行压缩。
+
+Part 1 已验收并推送 d3c0f5d，见 ChangeLog 004。Part 2 两档完整验收通过：默认零依赖、空模块缓存/禁用下载/无 cgo、Go -race/vet/构建、TS 类型检查、10 项工具自测及 52 项客户端测试（6 文件）通过，Go 覆盖率 84.6%；真实档 -race/vet/无 cgo/驱动包含检查通过，覆盖率 83.1%。新增 6 项默认 Go 顶层压缩专项（含子用例）、真实档共享压缩持久化/重开/摘要用量恢复专项、1 项长会话真实 CLI 重启恢复测试。临时独立端口 MongoDB/Redis 已停止；未调用真实模型 API。Part 2 发布见 ChangeLog 2026-10-26-005。
+
+当前资料 Phase 1—5 共 17 个文件；Phase 1—5 现有 Part 已实施，Phase 6 未收到。未实现 OS 沙箱、跨进程工具日志/副作用 exactly-once、XML 工具调用解析、原生 Anthropic 协议或真实缓存收益验证。摘要是有损视图，语义质量尚无真实模型实测；默认文件档仍整文件重写，长期原始日志与摘要文件会增长，当前无物理日志清理。1 MiB/512 条限制应用于模型视图，已有工具结果/请求大小限制不变。
+
+启用方式（从仓库根目录）：
+
+```bash
+LOOP_IMPL=v2 LLM_PROVIDER=mock bash run_backend.sh
+# 另一个终端
+./run_client.sh "检查工作区" --workspace /path/to/workspace
+# 实际模型使用本地 .env 配置；依然设置 LOOP_IMPL=v2
+```
+
+无压缩时既有消息前缀只追加；v2 压缩会替换历史旧段，system/tools 静态段保持不变。摘要仅改变模型视图，不会删除原始 JSONL/Mongo 正文。

@@ -232,7 +232,7 @@ func (store *JSONLTranscriptStore) UpdateReply(ctx context.Context, msgID string
 	return appendStoreRecords(ctx, path, old, []Message{record})
 }
 
-func (store *JSONLTranscriptStore) Latest(ctx context.Context, sid string, n int) ([]Message, error) {
+func (store *JSONLTranscriptStore) RawLatest(ctx context.Context, sid string, n int) ([]Message, error) {
 	store.mu.Lock()
 	defer store.mu.Unlock()
 	if err := ctx.Err(); err != nil {
@@ -284,6 +284,13 @@ func (store *JSONLTranscriptStore) Latest(ctx context.Context, sid string, n int
 }
 
 func (store *JSONLTranscriptStore) SaveSummary(ctx context.Context, sid string, summary Summary) error {
+	raw, err := store.RawLatest(ctx, sid, allHistory)
+	if err != nil {
+		return err
+	}
+	if err := validateSummary(summary, raw); err != nil {
+		return err
+	}
 	store.mu.Lock()
 	defer store.mu.Unlock()
 	if err := ctx.Err(); err != nil {
@@ -309,5 +316,13 @@ func (store *JSONLTranscriptStore) SaveSummary(ctx context.Context, sid string, 
 	if len(old) > 0 && old[len(old)-1] != '\n' {
 		return fmt.Errorf("%w: incomplete summary line", ErrStoreInvalid)
 	}
-	return appendStoreRecords(ctx, path, old, []Message{{"origin_start_id": summary.OriginStartID, "origin_end_id": summary.OriginEndID, "content": summary.Content}})
+	data, err := json.Marshal(summary)
+	if err != nil {
+		return err
+	}
+	var record Message
+	if err := json.Unmarshal(data, &record); err != nil {
+		return err
+	}
+	return appendStoreRecords(ctx, path, old, []Message{record})
 }

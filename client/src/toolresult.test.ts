@@ -99,3 +99,33 @@ test('default, explicit v1 and unregistered loop selections complete the real mo
         }
     } finally {fs.rmSync(temp, {recursive: true, force: true});}
 });
+
+test('v2 compresses long CLI sessions and resumes checkpoints after backend restart', {timeout: 30_000}, async () => {
+    const temp = fs.mkdtempSync(path.join(os.tmpdir(), 'minicoco-compress-cli-'));
+    try {
+        const binary = path.join(temp, 'backend');
+        const build = spawnSync('go', ['build', '-o', binary, '.'], {cwd: path.join(project, 'backend'), encoding: 'utf8'});
+        assert.equal(build.status, 0, build.stderr);
+        const workspace = path.join(temp, 'workspace');fs.mkdirSync(workspace);
+        let running = await backend(binary, temp, 'mock', 'v2');
+        try {
+            const query = 'remember-this-path project/src/main.go ' + 'x'.repeat(24_000);
+            const first = await cli([query, '--server', running.url, '--workspace', workspace]);
+            assert.equal(first.code, 0, first.stderr);
+            const sid = first.stderr.match(/\[session\] (s_[a-f0-9]+)/)?.[1];assert(sid, first.stderr);
+            const second = await cli([query, '--resume', sid, '--server', running.url]);
+            assert.equal(second.code, 0, second.stderr);
+            const summaryPath = path.join(temp, 'data/transcripts', sid + '.summary.jsonl');
+            const summaries = fs.readFileSync(summaryPath, 'utf8').trim().split('\n').map(line => JSON.parse(line) as {prefix_count: number; content: string});
+            assert(summaries.some(summary => summary.prefix_count >= 3 && summary.content.includes('Mock context summary')));
+            const canonical = fs.readFileSync(path.join(temp, 'data/transcripts', sid + '.jsonl'), 'utf8');
+            assert(canonical.includes('remember-this-path project/src/main.go'), 'compression erased the original transcript');
+            await running.stop();running = await backend(binary, temp, 'mock', 'v2');
+            const third = await cli(['continue after restart', '--resume', sid, '--server', running.url]);
+            assert.equal(third.code, 0, third.stderr);
+            const info = await getSession(running.url, sid);
+            assert.equal(info.session.message_count, 12);assert.equal(info.session.total_tokens, 12);
+            assert.equal((await (await fetch(running.url + '/health')).json() as {loop_impl: string}).loop_impl, 'v2');
+        } finally {await running.stop();}
+    } finally {fs.rmSync(temp, {recursive: true, force: true});}
+});

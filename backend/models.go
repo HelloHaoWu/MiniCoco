@@ -16,7 +16,7 @@ import (
 //go:embed models.json
 var embeddedModels []byte
 
-// MaxTokens is a configured context-budget ceiling for the future budget seam,
+// MaxTokens is a configured context-budget ceiling used by the v2 estimator,
 // not the provider's output max_tokens parameter or an enforced token counter.
 type ModelRoute struct {
 	effective      bool

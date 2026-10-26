@@ -12,6 +12,7 @@
 - 工具结果先校验完整身份再按请求顺序格式化并落库。Native 保留旧字段/错误前缀；XML 必须转义文本并限制标签名称，按转义后的 Go JSON 最坏体积预留预算。已持久化结果的会话不得混用格式；默认 Native 指纹保持兼容。完整 prompt 调试默认关闭，仅在显式开关下输出本地 stderr，日志不得提交。
 - 模型路由集中在 models.json / models.go，提示词、formatter 与传输共用单轮快照。修改路由须同步模型能力/提示词测试和配置迁移说明；maxTokens 用于 v2 上下文估算预算，不得误用作输出 max_tokens。未知模型在创建会话前拒绝，成功轮回放不调用供应商。模型规格须查官方资料，项目配置与实际供应商能力分开描述。
 - 新单轮实现须通过 registerLoop 注册，保留 context 取消、固定 roundId 幂等、完整批次持久化后再暴露及统一失败结束边界；SSE/JSON 共用分流。空/未知 LOOP_IMPL 回退 v1，未实现的压缩能力不得宣称可用。相同 family/mode/Schema 的 system/tools 须与工作区和历史无关，追加消息不改已有前缀；诊断 hash/模拟缓存不能当作真实命中或收益证据。
+- 压缩只能改变模型视图，RawLatest 保留原始幂等、工具身份和计数；保存摘要必须校验完整批次边界及源指纹，独立去重摘要 usage 并支持回写恢复，不能用 Latest 的压缩长度更新原始账本。
 - 每个 Part 达到对应行为验收要求后才标记完成；执行统一检查，区分历史验证与本次新运行结果。真实库验收使用 check_realdb.sh 并显式指定测试服务；缺少服务的 skip 不算验收通过。
 - 在本工作区，每完成一个 Part 并通过验收，检查更新两层 AGENTS、完成上层 ChangeLog 及索引后，自动提交该 Part 的相关代码和仓库内文档并推送 GitHub 一次，用户已授权，无需逐次询问。提交前检查 diff/暂存范围，只提交相关改动，核实目标分支，不强推、不自动合并 PR。如实记录提交号及推送结果。
 - 上层 AgentDocs/、ChangeLogs/、AGENTS.md 位于本仓库外，推送本仓库不会上传它们，不擅自改变仓库边界。独立克隆缺少阶段资料时，不根据摘要补造设计或验收结果。
@@ -21,6 +22,7 @@
 - backend/：Go 持久化单轮请求服务。main.go 接收 HTTP 请求，agentloop.go 编排单轮，llm.go 调用模型；errors.go 分类失败，mock.go 提供确定性故障预算，transport.go 收集有界 JSON 事件。prompts/ 和 tools/ 编译嵌入提示词及六个工具 Schema。
 - backend/tools.go：ToolName 注册、固定 read/list/grep/write/edit/run_command 顺序、兼容最高 Schema 版本与模式过滤；tools/*__vN.json 含最低 Harness 版本 availableVersion，当前内部版本 1，元数据不发给供应商。prompt.go 使用请求模式构建清单，启动时检查全部资源。
 - backend/loop_registry.go：LoopImpl、registerLoop、并发安全选择、LOOP_IMPL 与未知回退；v1 委托现有持久化服务。agentloop.go 的共享入口贯通 SSE/JSON；main.go 启动日志和 health.loop_impl 显示实际选择。loop_registry_test.go 验证分流/取消/回放/配置，prompt_cache_test.go 验证静态 hash、上游字节、历史追加和模拟缓存用量。
+- backend/context_budget.go / compression.go / context_history*.go：v2 估算预算、micro/full 摘要、主动/反应式压缩、进度限制、锁/限流与摘要视图；RawLatest 保留原始幂等/恢复依据，Latest 合并校验后的摘要；源指纹与独立用量账本保证重开和回写恢复。
 - backend/models.go / models.json：内嵌路由表、完整外部替代表、严格配置校验与单轮快照；llm.go 使用路由 provider/baseURL/temperature/thinking。prompts/system_openai.txt 与 system_claude.txt 按 family 选择；工作区仅注入首条 user 环境消息，不写 transcript。
 - backend/toolresult.go：Formatter、NativeFormatter、XmlFormatter、完整批次身份校验、请求顺序、已存格式识别及结果预算；prompt.go 在 MINICOCO_DEBUG_PROMPT=1 时输出完整 messages。toolresult_test.go、client/src/toolresult.test.ts 和真实档专项覆盖两轨落库/恢复/回放。
 - backend/sessions.go：稳定首轮会话、已提交历史、输入/预占、模型调用、final 和元数据回写、成功事件回放；session_http.go 提供列表和恢复元数据。
@@ -39,11 +41,11 @@ mode 可选，省略/空串等价 full（六个工具）；readonly 仅 read_fil
 
 模型路由 isFunctionCall=true 使用 Native（N 条 role:tool），false 使用 XML（一条 role:user，含 status/id/工具名）。默认真实模型、mock、mock-claude 为 Native，mock-xml 为 XML。结果顺序与请求一致，Native ERROR 前缀及旧指纹保持；XML 使用 xml-v1 标识，已有结果的会话不能切换格式。旧 MINICOCO_MODEL_IS_FUNCTION_CALL 非空明确报错，需迁移到路由字段。MINICOCO_MODELS_FILE 可指定完整替代表（1 MiB 上限，非合并），自定义模型须注册；表按新请求读取，修改请原子替换，pending 重试保持配置稳定。删除旧模型条目会阻断相应会话，须保留恢复所需路由。
 
-默认 deepseek-flash / deepseek-v4-pro 路由 temperature=0.7、thinking=disabled；0.7 是阶段配置，maxTokens=131072 是未来预算接缝，非供应商窗口/输出上限，v2 按 UTF-16 字符/2 向上估算，非真实 tokenizer；当前仍是 1 MiB / 512 条历史预算。OpenAI 兼容传输与 mock 两种 provider，family openai/claude 仅提示词差异，mock-claude 不代表 Anthropic API 已接入。LLM_PROVIDER=mock 离线覆盖；空/openai 遵从路由 provider，mock 路由保持本地；LLM_BASE_URL 非空覆盖所有 openai 路由端点，按模型使用不同端点时显式设为空。默认有效 provider 为 mock 时初始化 flaky 预算。thinking enabled 需先实现 reasoning_content 持久化/回传，当前配置拒绝。
+默认 deepseek-flash / deepseek-v4-pro 路由 temperature=0.7、thinking=disabled；0.7 是阶段配置，maxTokens=131072 是 v2 启发预算配置，非供应商窗口/输出上限，v2 按 UTF-16 字符/2 向上估算，非真实 tokenizer；当前仍是 1 MiB / 512 条历史预算。OpenAI 兼容传输与 mock 两种 provider，family openai/claude 仅提示词差异，mock-claude 不代表 Anthropic API 已接入。LLM_PROVIDER=mock 离线覆盖；空/openai 遵从路由 provider，mock 路由保持本地；LLM_BASE_URL 非空覆盖所有 openai 路由端点，按模型使用不同端点时显式设为空。默认有效 provider 为 mock 时初始化 flaky 预算。thinking enabled 需先实现 reasoning_content 持久化/回传，当前配置拒绝。
 
 此处仍只实现结果呈现，未实现 XML 工具调用生成/解析。MINICOCO_DEBUG_PROMPT=1 显式输出完整 messages，可能含私密代码/用户文本，默认关闭。system/tools 在相同 family/mode 下与 workspace 无关，环境消息在 system 之后、历史之前；不表示已验证供应商缓存命中。会话元数据保存首轮模型，显式 --model 只覆盖本次调用，恢复覆盖需再次传入。
 
-LOOP_IMPL 默认/空为 v1，未注册键回退 v1；环境和 .env 支持，环境优先。生产已注册 v1/v2，v2 先接入预算触发，摘要实现由 Part 2 补齐；测试假实现改名 test-v2；无压缩版、用户分桶或 HTTP 注册接口。注册拒绝空/重复/空实现，读写锁保护；分流键不改变协议或旧轮次指纹，pending 重试保持实现/路由配置稳定，不表示自动数据迁移。缓存诊断 hash=SHA256(system_text+tools_json)，非完整 HTTP 请求或供应商 cache key。相同 family/mode/Schema 下，工具 JSON 字节、工作区隔离和历史前缀追加已验收；改 family/mode/Schema 可使 hash 改变。cacheHandle、命中指标持久化和真实命中率/延迟/费用尚未实现或验证。
+LOOP_IMPL 默认/空为 v1，未注册键回退 v1；环境和 .env 支持，环境优先。生产已注册 v1/v2，v2 已实现预算、摘要和压缩重试；测试假实现为 test-v2；无用户分桶或 HTTP 注册接口。注册拒绝空/重复/空实现，读写锁保护；分流键不改变协议或旧轮次指纹，pending 重试保持实现/路由配置稳定，不表示自动数据迁移。缓存诊断 hash=SHA256(system_text+tools_json)，非完整 HTTP 请求或供应商 cache key。相同 family/mode/Schema 下，工具 JSON 字节、工作区隔离和历史前缀追加已验收；改 family/mode/Schema 可使 hash 改变。cacheHandle、命中指标持久化和真实命中率/延迟/费用尚未实现或验证。
 
 默认文件档 data/ 相对后端 cwd（启动脚本为 backend/data/），MINICOCO_DATA_DIR 可设绝对路径，每目录仅一个写入实例。JSONL 整文件原子替换，协调器只在进程内生效。部署须持久化数据目录。
 
@@ -51,13 +53,13 @@ LOOP_IMPL 默认/空为 v1，未注册键回退 v1；环境和 .env 支持，环
 
 Redis 提供 TTL 锁、Lua CAS 解锁、固定窗口限流和 feature_toggle 开关；inbox 订阅匹配本节点 X-Emitter-Id 并投递 SSE。Pub/Sub 是实时至多一次投递，不能替代存储或任务队列；只有可信后端可发布已授权且按需持久化的事件，模型仍在接收节点运行。共享业务数据的实例须使用同一 SQLite 文件、Mongo 数据库和 Redis 前缀；SQLite 多进程共享只支持本机本地磁盘方案，未实现跨机器控制面。
 
---list / --resume 使用后端元数据和历史。同进程保留的工具结果可续传；退出后若存在未完成工具批次，拒绝自动重放。无跨进程工具执行日志、外部副作用 exactly-once 或回滚。SSE/JSON 共用流式上游；瞬时故障最多 8 次流式 + 1 次 JSON，fatal/取消不兜底。compressSeam 是空接缝，need_compression 明确失败，摘要不自动合并。
+--list / --resume 使用后端元数据和历史。同进程保留的工具结果可续传；退出后若存在未完成工具批次，拒绝自动重放。无跨进程工具执行日志、外部副作用 exactly-once 或回滚。SSE/JSON 共用流式上游；瞬时故障最多 8 次流式 + 1 次 JSON，fatal/取消不兜底。v2 已实现主动/反应式压缩、摘要合并和最多 3 次进度保证；v1 不自动压缩。
 
 后端默认本机监听、无鉴权，仅本地匿名会话；文件工具检查路径与符号链接，命令 cwd 不是 OS 沙箱。已验证本机真实服务和跨进程协调，未验证生产多机器部署、跨平台或真实模型 API。
 
 ## 阶段与验证状态
 
-Phase 1—4 已验收并推送 f9667d7；Phase 5 Part 1 本次已实现并验收，详细结果见本文件末尾本次更新。Phase 5 Part 2 紧接实施；Phase 6 资料尚未收到。发布记录见上层 ChangeLog 2026-10-26-004。
+Phase 1—5 的现有 Part 均已实现并验收。本次前置基线是 Part 1 的 d3c0f5d；Part 2 发布结果见上层 ChangeLog 2026-10-26-005。实际验收与未实现边界见本文件末尾。Phase 6 尚未收到。
 
 从仓库根目录执行，默认要求 Go ≥ 1.22、Node ≥ 24：
 
@@ -79,8 +81,15 @@ MINICOCO_TEST_MONGO_URI=mongodb://127.0.0.1:27017 MINICOCO_TEST_REDIS_URL=redis:
 # 手动构建在 backend/：go build -modfile=go.realdb.mod -tags realdb .
 ```
 
-## Phase 5 Part 1 本次更新（2026-10-26）
+## Phase 5 当前实现（2026-10-26）
 
-已实现 context_budget.go：UTF-16 字符/2 向上估算（含 tool_calls/调用 ID）、base64 图片估算；扣除 system/tools/环境信息后的可用预算，严格 >0.65 micro、>0.80 full。生产注册 LOOP_IMPL=v2（v1 保留旧行为），v2 在调用上游前触发 need_compression。Part 1 暂止于触发，真实摘要策略由紧接着的 Part 2 实现。trimToBudget 是纯上下文视图：保尾、补 user，不拆 Native/XML 完整工具批次；单条文本可从尾截断，受保护工具批次独自超限明确 cannot_compress，不破坏调用身份。原始存储历史不被截断。
+- context_budget.go 以 UTF-16 字符/2 向上估算文本、工具调用/ID；图片 base64 估算仅是估算器能力，HTTP/存储仍为文本协议。maxTokens 扣除 system/tools/环境后为历史额度，>0.65 micro、>0.80 full；这是启发预算，不是供应商 tokenizer 或输出 max_tokens。
+- LOOP_IMPL=v2 启用 compression.go，v1 保留不自动压缩的基线；两者均可读取已存在的摘要视图。主动预算与上游 need_compression 共用 compactContext，每个后端请求最多 3 次压缩/trim 尝试；新 query 保最后 user，工具轮保最后完整 Native/XML 批次。范围至少替换 3 条为两条摘要前缀，要求消息数和估算 token 都严格下降；缩不动或受保护工具块放不下明确 cannot_compress。
+- micro 压最旧的小段，full 压尾段前历史。summarize 对真实兼容端点发无工具摘要请求，要求保留决策/路径/未决事项/结论；mock 用确定性占位，摘要不超过 8 KiB。摘要请求自身超限、摘要锁不可用或全局 rate:summary（1/10s）拒绝时只生成安全 trim 视图；取消贯穿请求，不提交不完整模型轮次。
+- context_history.go / context_history_realdb.go：TranscriptStore 增加 RawLatest/Summaries，Latest 返回 user 占位+assistant 摘要+未压段。Summary 通过 PrefixCount 和 PrefixHash 校验不可变原始前缀；originStartId/EndId 是跨存储通用的逻辑消息序号。旧无 checkpoint 的摘要保持只保存、不自动合并。RawLatest 决定 pending stale、工具身份、恢复安全及 MessageCount，不能拿压缩后的长度当账本计数；原始正文与成功事件不删除，压缩不减少磁盘存储。
+- 摘要保存成功后其真实 usage 以独立内部账本 ID 去重提交；reconcile 可恢复摘要已写但 meta 未回写的情况。NUL 前缀为内部摘要用量域，用户 roundId 拒绝 NUL，防止账本碰撞。失败供应商请求可能仍产生未统计费用。mock 摘要 usage=0，普通 mock 轮仍为 1/1/2。
+- v2 对每次模型尝试暂存全部事件，成功持久化后统一发出，SSE 不再逐 token 实时显示；避免失败文本混入压缩重试结果。v1 保持原流式输出，客户端只提交原增量，不重跑工具；v1 收到 need_compression 时仍明确终止，客户端没有历史可自行压缩。
 
-默认 check.sh 通过，覆盖率 84.9%；Go -race/vet/构建、默认零依赖、TS 类型检查、10 项工具自测、51 项客户端测试通过。真实 check_realdb.sh 通过，覆盖率 83.3%，未改驱动和存储接口。新增 3 项 Go 顶层预算/截断/主动触发专项；无真实模型 API 调用。Part 1 发布见上层 ChangeLog 2026-10-26-004，下一步立即进行 Part 2。两层 AGENTS 已检查同步。
+Part 1 已验收并推送 d3c0f5d，见 ChangeLog 004。Part 2 本次两档完整验收通过：默认零依赖、空模块缓存/禁用下载/无 cgo、Go -race/vet/构建、TS 类型检查、10 项工具自测及 52 项客户端测试（6 文件）通过，Go 覆盖率 84.6%；真实档 -race/vet/无 cgo/驱动包含检查通过，覆盖率 83.1%。新增 6 项默认 Go 顶层压缩专项（含子用例）、真实档共享压缩持久化/重开/摘要用量恢复专项、1 项长会话真实 CLI 重启恢复测试。临时独立端口 MongoDB/Redis 已停止；未调用真实模型 API。Part 2 发布见 ChangeLog 2026-10-26-005。
+
+当前资料 Phase 1—5 共 17 个文件；Phase 1—5 现有 Part 已实施，Phase 6 未收到。未实现 OS 沙箱、跨进程工具日志/副作用 exactly-once、XML 工具调用解析、原生 Anthropic 协议或真实缓存收益验证。摘要是有损视图，语义质量尚无真实模型实测；默认文件档仍整文件重写，长期原始日志与摘要文件会增长，当前无物理日志清理。1 MiB/512 条限制应用于模型视图，已有工具结果/请求大小限制不变。

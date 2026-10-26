@@ -61,7 +61,7 @@ export async function runRoundWithRetry(args: RoundArgs, policy: RetryPolicy = R
             const classification = classify(error, !!signal?.aborted);
             if (classification === 'fatal') throw error;
             if (classification === 'compress') {
-                const failure = new RoundError('cannot_compress: server compression is not implemented', 'backend', {code: 'cannot_compress', retryable: false, cause: error});
+                const failure = new RoundError('cannot_compress: backend could not complete compression; no client history is available', 'backend', {code: 'cannot_compress', retryable: false, cause: error});
                 failure.attempts = attempts;
                 throw failure;
             }

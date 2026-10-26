@@ -29,10 +29,17 @@ type Usage struct {
 	Total      int64 `json:"total"`
 }
 
+// PrefixCount addresses immutable committed-message ordinals, independent of
+// the store-specific physical IDs. PrefixHash validates the exact source range.
+// Old summaries without these fields remain saved-only records.
 type Summary struct {
 	OriginStartID string `json:"origin_start_id"`
 	OriginEndID   string `json:"origin_end_id"`
 	Content       string `json:"content"`
+	PrefixCount   int    `json:"prefix_count,omitempty"`
+	PrefixHash    string `json:"prefix_hash,omitempty"`
+	Usage         Usage  `json:"usage,omitempty"`
+	UsageID       string `json:"usage_id,omitempty"`
 }
 
 var (
@@ -57,9 +64,12 @@ type TranscriptStore interface {
 	Append(ctx context.Context, sid, roundID string, msgs []Message) error
 	PreoccupyReply(ctx context.Context, sid string) (msgID string, err error)
 	UpdateReply(ctx context.Context, msgID string, m Message, u Usage) error
-	// Latest returns chronological final messages, excluding pending reservations
-	// and storage metadata. n == 0 returns an empty slice; n < 0 is invalid.
+	// Latest returns the prompt view (validated summary + remaining history).
+	// RawLatest returns committed messages for identity, resume and ledger counts.
+	// Both exclude pending/storage metadata; n == 0 is empty, n < 0 invalid.
 	Latest(ctx context.Context, sid string, n int) ([]Message, error)
+	RawLatest(ctx context.Context, sid string, n int) ([]Message, error)
+	Summaries(ctx context.Context, sid string) ([]Summary, error)
 	SaveSummary(ctx context.Context, sid string, s Summary) error
 	Round(ctx context.Context, sid, roundID string) (StoredRound, error)
 	ReserveRound(ctx context.Context, sid, roundID, fingerprint string, input []Message, baseCount int) (StoredRound, error)

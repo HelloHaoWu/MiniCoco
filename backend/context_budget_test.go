@@ -90,7 +90,7 @@ func TestV2ProactiveBudgetStopsBeforeProvider(t *testing.T) {
 	writeTestRoutes(t, map[string]ModelRoute{"tiny": route})
 	response, events := deltaResponse(t, map[string]any{"roundId": "proactive", "query": strings.Repeat("x", 170), "model": "tiny", "stream": false})
 	requireRoundFinish(t, response, events, "error")
-	if events[0].Code != codeNeedCompression {
+	if events[0].Code != "cannot_compress" {
 		t.Fatalf("provider called before budget trigger: %+v", events)
 	}
 }

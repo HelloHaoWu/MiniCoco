@@ -257,7 +257,9 @@ func TestJSONLTranscriptCancellation(t *testing.T) {
 		func() error { _, err := store.PreoccupyReply(ctx, "s_cancel"); return err },
 		func() error { return store.UpdateReply(ctx, "s_cancel.m_reply", Message{"role": "assistant"}, Usage{}) },
 		func() error { _, err := store.Latest(ctx, "s_cancel", 10); return err },
-		func() error { return store.SaveSummary(ctx, "s_cancel", Summary{"a", "b", "text"}) },
+		func() error {
+			return store.SaveSummary(ctx, "s_cancel", Summary{OriginStartID: "a", OriginEndID: "b", Content: "text"})
+		},
 	} {
 		if err := operation(); !errors.Is(err, context.Canceled) {
 			t.Fatalf("cancelled operation: %v", err)

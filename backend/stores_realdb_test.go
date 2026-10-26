@@ -197,7 +197,7 @@ func TestRealMongoUniqueAtomicRounds(t *testing.T) {
 	if committed.Load() != 1 || conflicts.Load() != 1 {
 		t.Fatal("pending-to-final CAS did not select a single winner")
 	}
-	if err := one.transcript.SaveSummary(ctx, "s_atomic", Summary{"first", "last", "summary"}); err != nil {
+	if err := one.transcript.SaveSummary(ctx, "s_atomic", Summary{OriginStartID: "first", OriginEndID: "last", Content: "summary"}); err != nil {
 		t.Fatal(err)
 	}
 	summaryCount, err := one.transcript.(*MongoTranscriptStore).summaries.CountDocuments(ctx, bson.M{"sessionId": "s_atomic"})
@@ -620,3 +620,5 @@ func TestRealLoopDispatchAndCommittedReplay(t *testing.T) {
 		t.Fatal("implementation switch/replay duplicated usage", err)
 	}
 }
+
+func TestRealCompressionPersistence(t *testing.T) { runCompressionPersistence(t, realContractFactory) }

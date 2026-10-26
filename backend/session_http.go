@@ -94,7 +94,7 @@ func handleSessions(w http.ResponseWriter, r *http.Request) {
 		writeSessionError(w, err)
 		return
 	}
-	history, err := activeSessions.transcript.Latest(r.Context(), sid, 1)
+	history, err := activeSessions.transcript.RawLatest(r.Context(), sid, 1)
 	if err != nil {
 		writeSessionError(w, err)
 		return
