@@ -99,7 +99,9 @@ test('commands are asynchronous, preserve exit codes, enforce output limits and 
     setTimeout(() => { ticked = true; }, 0);
     const output = await createHandler('run_command', ctx)!.execute({command: "sleep 0.05; echo ok; exit 7"});
     assert(ticked); assert.match(output, /exit_code: 7/); assert.match(output, /ok/);
-    await assert.rejects(async () => createHandler('run_command', ctx)!.execute({command: `"${process.execPath}" -e "process.stdout.write('x'.repeat(100000))"`}), /output exceeds/);
+    const flood = await createHandler('run_command', ctx)!.execute({command: `"${process.execPath}" -e "process.stdout.write('x'.repeat(5*1024*1024))"`});
+    assert.match(flood, /已截断/);
+    const logs = fs.readdirSync(path.join(ws, 'data/terminals'));assert.equal(logs.length, 1);assert.equal(fs.statSync(path.join(ws, 'data/terminals', logs[0])).size, 1024*1024);
     const controller = new AbortController(); ctx.signal = controller.signal;
     const command = createHandler('run_command', ctx)!.execute({command: '(sleep 1; echo bad > descendant-marker) & wait'});
     setTimeout(() => controller.abort(), 40);

@@ -108,10 +108,18 @@ Phase 6 Part 2：jsonl_sink.go 提供容量 1024 的共享异步 JSONL 队列，
 
 日志为 best effort，队列丢弃/磁盘错误/崩溃可能缺记录；错误数来自日志且异步可延迟，不是交易账本。服务端时间线文件限 8 MiB，客户端响应限 4 MiB，超限明确报错，尚无轮转。日志不含正文/参数，禁止用 trace 再 BumpUsage。Part 1 已推送 f7a71ea，Part 2 发布见 ChangeLog 007；下一步 Phase 7 Part 1，Phase 7—9 尚未实现。
 
-## 最新进度：Phase 7 Part 1（2026-10-26）
+## Phase 7 Part 1 历史验收（2026-10-26）
 
 Phase 7 Part 1：write_file/edit_file/run_command 标记 requiresApproval；Conversation 执行前审批，拒绝作为 ERROR: denied by user 回灌并继续循环。CLI --yes 显式放行，TTY 交互 y/N，非 TTY 默认拒绝；readonly 工具免审批，模式禁用仍优先。取消贯穿审批。audit.ts 通过有界异步队列发送摘要记录至 POST /audit，后端复用 Phase 6 JSONL sink 写 data/audit.jsonl，保存 session/trace/tool/argsDigest/approved/status/ms，拒绝正文参数字段。CLI 退出有界 flush。
 
 check.sh 和 check_realdb.sh 均通过：默认零依赖、Go -race/vet/构建、TS 类型检查、10 工具自测、57 客户端测试（7 文件）；默认覆盖率 83.4%，真实档 82.2%。新增拒绝后继续/只读免审批/--yes/管道默认拒绝/取消/审计摘要测试，后端共享 sink 和拒绝正文参数测试。真实 PTY 手动验收：出现 y/N，输入 n 后模型继续、退出 0、未生成目标文件。
 
 审批不是 OS 沙箱；直接调用底层 Handler 的程序需自行提供审批入口。审计是本地客户端报告、best effort，不能作为安全证明或工具去重日志。--yes 表示本次调用显式批准危险工具。下一步 Part 2 进程资源保护和权限提示词；Phase 8—9 未实施。Phase 6 Part 2 已推送 f3feace，本 Part 发布见 ChangeLog 008。
+
+## 最新进度：Phase 7 完成（2026-10-26）
+
+Phase 7 Part 2：run_command 在 macOS/Linux 下监测整个普通子进程组的 RSS（100ms 采样），默认 1.5 GiB、120s 墙钟超时和 1 MiB 合并输出限额。超限/取消先 SIGTERM，再 SIGKILL 清理；输出超限保存 workspace/data/terminals/<uuid>.out 的有界已捕获前缀，返回尾部 2 KiB 和明确截断说明。RUN_OUTPUT_CAP / RSS_CAP / RUN_TIMEOUT_MS 从客户端环境读取并严格校验。permissions.txt 按阶段原文追加到模型族 system，静态前缀和预算均包含此段。
+
+本次 check.sh 与 check_realdb.sh 均通过：默认零依赖、Go -race/vet/构建、TS 类型检查、10 工具自测和 60 客户端测试（8 文件）；默认覆盖率 83.3%，真实档 82.2%。实测 5 MiB 输出限制为 1 MiB 日志、RSS 杀死分配内存的后代且 PID 消失、墙钟超时/取消无后续标记文件、配置非法不执行命令；权限原文和固定预算纳入测试。
+
+RSS 是采样保护，不是内核硬限制；自行脱离进程组的恶意命令、OS 沙箱和 Windows 命令保护未实现，Windows 明确拒绝 guarded command。日志只保存已捕获限额内输出，后续输出未保存；工具回传仍受 64 KiB JSON 预算。权限提示词为软约束，强制工具审批仍执行。真实模型是否主动声明意图尚未实测。Part 1 已推送 29cf85a，Part 2 发布见 ChangeLog 009；下一步 Phase 8 Part 1，Phase 8—9 尚未实施。

@@ -439,3 +439,9 @@ LOOP_IMPL=v2 LLM_PROVIDER=mock bash run_backend.sh
 交互终端执行 write_file / edit_file / run_command 前会询问 `[y/N]`。非交互管道默认拒绝这些工具；需要自动执行时显式传 `--yes`。只读工具免审批，`--mode readonly/safe` 仍限制工具范围。拒绝作为工具错误回给模型，循环继续。
 
 审计由本地客户端异步发送到后端 `data/audit.jsonl`，只记录参数摘要及 approved/status，不记录参数正文。审计可能因队列满、网络或磁盘失败丢失，不是权限证明或重放日志。
+
+### 命令资源保护
+
+macOS/Linux 的 run_command 默认合并输出限额 1 MiB、进程组 RSS 采样阈值 1.5 GiB、超时 120s。可在启动客户端时设置 `RUN_OUTPUT_CAP` / `RSS_CAP`（字节）及 `RUN_TIMEOUT_MS`（毫秒）。超限/取消终止进程组；Windows 当前明确拒绝 guarded command。
+
+刷屏命令被终止后，已捕获前缀写入工作区 `data/terminals/<uuid>.out`，结果仅带尾部预览和截断说明；超出限额的输出没有保存。工具协议仍限制 64 KiB 回传。RSS 每 100ms 采样，不是内核硬限制，不能防止恶意进程自行脱离进程组；命令仍不是 OS 沙箱。

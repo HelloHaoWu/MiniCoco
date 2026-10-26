@@ -11,7 +11,7 @@ import (
 
 // Resources are embedded so the backend remains a self-contained binary.
 //
-//go:embed prompts/system_openai.txt prompts/system_claude.txt
+//go:embed prompts/system_openai.txt prompts/system_claude.txt prompts/permissions.txt
 var promptsFS embed.FS
 
 //go:embed tools/*.json
@@ -71,5 +71,9 @@ func promptParts(mode Mode, route ModelRoute) (string, []json.RawMessage, error)
 	if err != nil {
 		return "", nil, completionFailure(codeConfig, false, "unsupported prompt family", nil)
 	}
-	return string(prompt), tools, nil
+	permissions, err := promptsFS.ReadFile("prompts/permissions.txt")
+	if err != nil {
+		return "", nil, err
+	}
+	return string(prompt) + "\n" + string(permissions), tools, nil
 }
