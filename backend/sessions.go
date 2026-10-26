@@ -238,6 +238,15 @@ func (service *sessionService) process(ctx context.Context, req ChatRequest, emi
 	if err := historyBudget(current); err != nil {
 		return completionFailure(codeBadRequest, false, err.Error(), err)
 	}
+	if enabled, _ := ctx.Value(contextBudgetKey{}).(bool); enabled {
+		budget, err := budgetFor(current, req.Workspace, mode, route)
+		if err != nil {
+			return err
+		}
+		if budget.Mode != compactNone {
+			return completionFailure(codeNeedCompression, true, "context requires "+string(budget.Mode)+" compression", nil)
+		}
+	}
 	if _, err := service.transcript.ReserveRound(ctx, req.SessionID, req.RoundID, fingerprint, input, len(history)); err != nil {
 		return storageFailure(err)
 	}

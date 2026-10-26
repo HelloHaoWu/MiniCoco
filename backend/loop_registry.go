@@ -13,7 +13,7 @@ import (
 type LoopImpl func(context.Context, ChatRequest, func(Event)) error
 
 var loopRegistryMu sync.RWMutex
-var loopRegistry = map[string]LoopImpl{"v1": processRequestV1}
+var loopRegistry = map[string]LoopImpl{"v1": processRequestV1, "v2": processRequestV2}
 
 // Register before serving traffic. Locks also make lookup/registration safe
 // when backend extensions are initialized concurrently. Existing keys are final.
@@ -48,4 +48,10 @@ func pickLoop() LoopImpl {
 
 func processRequestV1(ctx context.Context, req ChatRequest, emit func(Event)) error {
 	return activeSessions.process(ctx, req, emit)
+}
+
+type contextBudgetKey struct{}
+
+func processRequestV2(ctx context.Context, req ChatRequest, emit func(Event)) error {
+	return activeSessions.process(context.WithValue(ctx, contextBudgetKey{}, true), req, emit)
 }

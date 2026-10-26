@@ -49,11 +49,11 @@ func TestLoopSelectionAndRegistration(t *testing.T) {
 		}
 	}
 	var called atomic.Int32
-	registerTestLoop(t, "v2", func(ctx context.Context, req ChatRequest, emit func(Event)) error {
+	registerTestLoop(t, "test-v2", func(ctx context.Context, req ChatRequest, emit func(Event)) error {
 		called.Add(1)
 		return processRequestV1(ctx, req, emit)
 	})
-	t.Setenv("LOOP_IMPL", "v2")
+	t.Setenv("LOOP_IMPL", "test-v2")
 	// A registered implementation must not repeat an already committed round.
 	response, events := deltaResponse(t, map[string]any{"roundId": "baseline", "query": "inspect", "stream": true})
 	requireRoundFinish(t, response, events, FinishToolCalls)
@@ -69,10 +69,10 @@ func TestLoopSelectionAndRegistration(t *testing.T) {
 func TestLoopDispatchBothTransportsAndFailure(t *testing.T) {
 	sessionFixture(t)
 	t.Setenv("LLM_PROVIDER", "mock")
-	t.Setenv("LOOP_IMPL", "v2")
+	t.Setenv("LOOP_IMPL", "test-v2")
 	var calls int
 	var seen []ChatRequest
-	registerTestLoop(t, "v2", func(ctx context.Context, req ChatRequest, emit func(Event)) error {
+	registerTestLoop(t, "test-v2", func(ctx context.Context, req ChatRequest, emit func(Event)) error {
 		if ctx.Err() != nil {
 			return ctx.Err()
 		}
@@ -114,11 +114,11 @@ func TestLoopDispatchBothTransportsAndFailure(t *testing.T) {
 }
 
 func TestLoopCancellationAndConcurrentLookup(t *testing.T) {
-	t.Setenv("LOOP_IMPL", "v2")
+	t.Setenv("LOOP_IMPL", "test-v2")
 	key := struct{}{}
 	ctx, cancel := context.WithCancel(context.WithValue(context.Background(), key, "request-context"))
 	cancel()
-	registerTestLoop(t, "v2", func(got context.Context, _ ChatRequest, _ func(Event)) error {
+	registerTestLoop(t, "test-v2", func(got context.Context, _ ChatRequest, _ func(Event)) error {
 		if got.Value(key) != "request-context" {
 			t.Error("dispatch replaced request context")
 		}
@@ -172,7 +172,7 @@ func TestLoopLocalConfigAndHealth(t *testing.T) {
 		t.Fatal(".env overrode exported selection")
 	}
 	t.Setenv("LLM_MODEL", "mock")
-	t.Setenv("LOOP_IMPL", "v2") // Unregistered in production; health reports fallback.
+	t.Setenv("LOOP_IMPL", "test-v2") // Unregistered in production; health reports fallback.
 	response := httptest.NewRecorder()
 	handleHealth(response, httptest.NewRequest("GET", "/health", nil))
 	var body map[string]string

@@ -592,11 +592,11 @@ func TestRealLoopDispatchAndCommittedReplay(t *testing.T) {
 	requireRoundFinish(t, response, events, FinishToolCalls)
 	sid := response.Header().Get("X-Session-Id")
 	var calls atomic.Int32
-	registerTestLoop(t, "v2", func(ctx context.Context, req ChatRequest, emit func(Event)) error {
+	registerTestLoop(t, "test-v2", func(ctx context.Context, req ChatRequest, emit func(Event)) error {
 		calls.Add(1)
 		return processRequestV1(ctx, req, emit)
 	})
-	t.Setenv("LOOP_IMPL", "v2")
+	t.Setenv("LOOP_IMPL", "test-v2")
 	request := map[string]any{"sessionId": sid, "roundId": "real-loop-result", "workspace": "/tmp", "stream": false, "toolUseResults": []ToolUseResult{{ID: "call_mock_1", Name: "list_dir", Output: "listing"}}}
 	response, original := deltaResponse(t, request)
 	requireRoundFinish(t, response, original, FinishStop)

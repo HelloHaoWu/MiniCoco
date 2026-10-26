@@ -10,8 +10,8 @@
 - 协议变更同步 Go/TypeScript 类型、消费器、mock、测试和产品说明。模型请求重试不得重复执行有副作用的工具，失败轮不得提交不完整 assistant/tool 批次；取消须贯穿请求、退避和工具，已执行的副作用不得声称回滚。
 - 工具增加/升级需使用 name__vN.json 与 availableVersion，更新后端注册顺序、模式策略及客户端 Handler/策略。模式必须贯穿请求、重试和执行；完整批次检查在任何本地副作用之前完成。同轮不得变更模式，默认 full 保留旧轮次指纹。模式不是鉴权或 OS 沙箱。
 - 工具结果先校验完整身份再按请求顺序格式化并落库。Native 保留旧字段/错误前缀；XML 必须转义文本并限制标签名称，按转义后的 Go JSON 最坏体积预留预算。已持久化结果的会话不得混用格式；默认 Native 指纹保持兼容。完整 prompt 调试默认关闭，仅在显式开关下输出本地 stderr，日志不得提交。
-- 模型路由集中在 models.json / models.go，提示词、formatter 与传输共用单轮快照。修改路由须同步模型能力/提示词测试和配置迁移说明；maxTokens 只预留上下文预算，不得误用作输出 max_tokens。未知模型在创建会话前拒绝，成功轮回放不调用供应商。模型规格须查官方资料，项目配置与实际供应商能力分开描述。
-- 新单轮实现须通过 registerLoop 注册，保留 context 取消、固定 roundId 幂等、完整批次持久化后再暴露及统一失败结束边界；SSE/JSON 共用分流。空/未知 LOOP_IMPL 回退 v1，未注册的 v2 不得宣称可用。相同 family/mode/Schema 的 system/tools 须与工作区和历史无关，追加消息不改已有前缀；诊断 hash/模拟缓存不能当作真实命中或收益证据。
+- 模型路由集中在 models.json / models.go，提示词、formatter 与传输共用单轮快照。修改路由须同步模型能力/提示词测试和配置迁移说明；maxTokens 用于 v2 上下文估算预算，不得误用作输出 max_tokens。未知模型在创建会话前拒绝，成功轮回放不调用供应商。模型规格须查官方资料，项目配置与实际供应商能力分开描述。
+- 新单轮实现须通过 registerLoop 注册，保留 context 取消、固定 roundId 幂等、完整批次持久化后再暴露及统一失败结束边界；SSE/JSON 共用分流。空/未知 LOOP_IMPL 回退 v1，未实现的压缩能力不得宣称可用。相同 family/mode/Schema 的 system/tools 须与工作区和历史无关，追加消息不改已有前缀；诊断 hash/模拟缓存不能当作真实命中或收益证据。
 - 每个 Part 达到对应行为验收要求后才标记完成；执行统一检查，区分历史验证与本次新运行结果。真实库验收使用 check_realdb.sh 并显式指定测试服务；缺少服务的 skip 不算验收通过。
 - 在本工作区，每完成一个 Part 并通过验收，检查更新两层 AGENTS、完成上层 ChangeLog 及索引后，自动提交该 Part 的相关代码和仓库内文档并推送 GitHub 一次，用户已授权，无需逐次询问。提交前检查 diff/暂存范围，只提交相关改动，核实目标分支，不强推、不自动合并 PR。如实记录提交号及推送结果。
 - 上层 AgentDocs/、ChangeLogs/、AGENTS.md 位于本仓库外，推送本仓库不会上传它们，不擅自改变仓库边界。独立克隆缺少阶段资料时，不根据摘要补造设计或验收结果。
@@ -39,11 +39,11 @@ mode 可选，省略/空串等价 full（六个工具）；readonly 仅 read_fil
 
 模型路由 isFunctionCall=true 使用 Native（N 条 role:tool），false 使用 XML（一条 role:user，含 status/id/工具名）。默认真实模型、mock、mock-claude 为 Native，mock-xml 为 XML。结果顺序与请求一致，Native ERROR 前缀及旧指纹保持；XML 使用 xml-v1 标识，已有结果的会话不能切换格式。旧 MINICOCO_MODEL_IS_FUNCTION_CALL 非空明确报错，需迁移到路由字段。MINICOCO_MODELS_FILE 可指定完整替代表（1 MiB 上限，非合并），自定义模型须注册；表按新请求读取，修改请原子替换，pending 重试保持配置稳定。删除旧模型条目会阻断相应会话，须保留恢复所需路由。
 
-默认 deepseek-flash / deepseek-v4-pro 路由 temperature=0.7、thinking=disabled；0.7 是阶段配置，maxTokens=131072 是未来预算接缝，非供应商窗口/输出上限，本 Part 不计 token；当前仍是 1 MiB / 512 条历史预算。OpenAI 兼容传输与 mock 两种 provider，family openai/claude 仅提示词差异，mock-claude 不代表 Anthropic API 已接入。LLM_PROVIDER=mock 离线覆盖；空/openai 遵从路由 provider，mock 路由保持本地；LLM_BASE_URL 非空覆盖所有 openai 路由端点，按模型使用不同端点时显式设为空。默认有效 provider 为 mock 时初始化 flaky 预算。thinking enabled 需先实现 reasoning_content 持久化/回传，当前配置拒绝。
+默认 deepseek-flash / deepseek-v4-pro 路由 temperature=0.7、thinking=disabled；0.7 是阶段配置，maxTokens=131072 是未来预算接缝，非供应商窗口/输出上限，v2 按 UTF-16 字符/2 向上估算，非真实 tokenizer；当前仍是 1 MiB / 512 条历史预算。OpenAI 兼容传输与 mock 两种 provider，family openai/claude 仅提示词差异，mock-claude 不代表 Anthropic API 已接入。LLM_PROVIDER=mock 离线覆盖；空/openai 遵从路由 provider，mock 路由保持本地；LLM_BASE_URL 非空覆盖所有 openai 路由端点，按模型使用不同端点时显式设为空。默认有效 provider 为 mock 时初始化 flaky 预算。thinking enabled 需先实现 reasoning_content 持久化/回传，当前配置拒绝。
 
 此处仍只实现结果呈现，未实现 XML 工具调用生成/解析。MINICOCO_DEBUG_PROMPT=1 显式输出完整 messages，可能含私密代码/用户文本，默认关闭。system/tools 在相同 family/mode 下与 workspace 无关，环境消息在 system 之后、历史之前；不表示已验证供应商缓存命中。会话元数据保存首轮模型，显式 --model 只覆盖本次调用，恢复覆盖需再次传入。
 
-LOOP_IMPL 默认/空为 v1，未注册键回退 v1；环境和 .env 支持，环境优先。生产只注册 v1，测试临时注册 v2；无压缩版、用户分桶或 HTTP 注册接口。注册拒绝空/重复/空实现，读写锁保护；分流键不改变协议或旧轮次指纹，pending 重试保持实现/路由配置稳定，不表示自动数据迁移。缓存诊断 hash=SHA256(system_text+tools_json)，非完整 HTTP 请求或供应商 cache key。相同 family/mode/Schema 下，工具 JSON 字节、工作区隔离和历史前缀追加已验收；改 family/mode/Schema 可使 hash 改变。cacheHandle、命中指标持久化和真实命中率/延迟/费用尚未实现或验证。
+LOOP_IMPL 默认/空为 v1，未注册键回退 v1；环境和 .env 支持，环境优先。生产已注册 v1/v2，v2 先接入预算触发，摘要实现由 Part 2 补齐；测试假实现改名 test-v2；无压缩版、用户分桶或 HTTP 注册接口。注册拒绝空/重复/空实现，读写锁保护；分流键不改变协议或旧轮次指纹，pending 重试保持实现/路由配置稳定，不表示自动数据迁移。缓存诊断 hash=SHA256(system_text+tools_json)，非完整 HTTP 请求或供应商 cache key。相同 family/mode/Schema 下，工具 JSON 字节、工作区隔离和历史前缀追加已验收；改 family/mode/Schema 可使 hash 改变。cacheHandle、命中指标持久化和真实命中率/延迟/费用尚未实现或验证。
 
 默认文件档 data/ 相对后端 cwd（启动脚本为 backend/data/），MINICOCO_DATA_DIR 可设绝对路径，每目录仅一个写入实例。JSONL 整文件原子替换，协调器只在进程内生效。部署须持久化数据目录。
 
@@ -57,15 +57,7 @@ Redis 提供 TTL 锁、Lua CAS 解锁、固定窗口限流和 feature_toggle 开
 
 ## 阶段与验证状态
 
-Phase 1—4 的全部现有 Part 已实现并验收（Phase 2 Part 3 为可选真实库档）。本次 Phase 4 Part 2 前置已推送基线 bc7d3ae；发布提交和推送结果见上层 ChangeLog 2026-10-26-003。当前仅收到 Phase 1—4 共 14 个资料文件，Phase 5/6 详细设计尚未收到。真实压缩、XML 工具调用解析、原生 Anthropic 协议、跨机器控制面及跨进程工具日志尚未实现。
-
-2026-10-26 本次完整验收：
-
-- 默认 check.sh 通过：空模块缓存/禁用下载/无 cgo、模块与非标准库列表仅 minicoco；Go -race/vet/构建、TS 类型检查、10 项工具自测、51 项客户端测试（6 个独立文件全部成功）。默认后端覆盖率 84.5%。
-- 新增 6 项默认 Go 顶层专项（含子用例）：4 项注册/默认回退/假 v2/双传输/错误/取消/并发查找/.env/health；2 项前缀矩阵与上游请求，覆盖双 family、三 mode、Native/XML、跨 workspace/轮次、Schema 改变导致 hash 改变、历史追加、合成缓存 usage 及成功回放。未调用真实供应商。
-- 新增客户端真实 Go/CLI 专项：LOOP_IMPL 默认、v1、未知键均闭环退出 0，health 显示有效 v1、正文和用量正确；既有路由、格式、可靠性、恢复、模式与工具不重放回归继续通过。
-- check_realdb.sh 全量 -race/vet/无 cgo/驱动包含检查通过，覆盖率 82.9%；新增 v1→假 v2、SQLite/Mongo 重开、失效 provider 下成功回放，不重复正文和用量；共同接口、并发与跨进程协调继续通过。未改存储协议或驱动清单。
-- 仅使用临时目录、独立端口 MongoDB 8.0.16/Redis 8.10.2、随机数据库/前缀、本机模拟模型和假密钥；临时数据库已停止。未调用真实模型 API，未验证真实缓存收益。cacheHandle 为文档可选项，本次未实现。
+Phase 1—4 已验收并推送 f9667d7；Phase 5 Part 1 本次已实现并验收，详细结果见本文件末尾本次更新。Phase 5 Part 2 紧接实施；Phase 6 资料尚未收到。发布记录见上层 ChangeLog 2026-10-26-004。
 
 从仓库根目录执行，默认要求 Go ≥ 1.22、Node ≥ 24：
 
@@ -86,3 +78,9 @@ STORE_BACKEND=real LLM_PROVIDER=mock bash run_backend_realdb.sh
 MINICOCO_TEST_MONGO_URI=mongodb://127.0.0.1:27017 MINICOCO_TEST_REDIS_URL=redis://127.0.0.1:6379/0 bash check_realdb.sh
 # 手动构建在 backend/：go build -modfile=go.realdb.mod -tags realdb .
 ```
+
+## Phase 5 Part 1 本次更新（2026-10-26）
+
+已实现 context_budget.go：UTF-16 字符/2 向上估算（含 tool_calls/调用 ID）、base64 图片估算；扣除 system/tools/环境信息后的可用预算，严格 >0.65 micro、>0.80 full。生产注册 LOOP_IMPL=v2（v1 保留旧行为），v2 在调用上游前触发 need_compression。Part 1 暂止于触发，真实摘要策略由紧接着的 Part 2 实现。trimToBudget 是纯上下文视图：保尾、补 user，不拆 Native/XML 完整工具批次；单条文本可从尾截断，受保护工具批次独自超限明确 cannot_compress，不破坏调用身份。原始存储历史不被截断。
+
+默认 check.sh 通过，覆盖率 84.9%；Go -race/vet/构建、默认零依赖、TS 类型检查、10 项工具自测、51 项客户端测试通过。真实 check_realdb.sh 通过，覆盖率 83.3%，未改驱动和存储接口。新增 3 项 Go 顶层预算/截断/主动触发专项；无真实模型 API 调用。Part 1 发布见上层 ChangeLog 2026-10-26-004，下一步立即进行 Part 2。两层 AGENTS 已检查同步。

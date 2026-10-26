@@ -124,13 +124,13 @@ MINICOCO_MODELS_FILE=/absolute/path/models.json LLM_MODEL=my-model LLM_BASE_URL=
 
 #### 实现注册、分流与缓存前缀（Phase 4 Part 2）
 
-`backend/loop_registry.go` 定义统一的 `LoopImpl(context.Context, ChatRequest, emit) error`，保留 HTTP 请求的取消和超时。默认只注册 `v1`，直接进入现有持久化单轮服务；SSE 和 JSON 都在共享入口 `processRequestContext` 中选择一次实现，错误仍走同一分类和结束事件。`LOOP_IMPL` 可通过环境或本地 .env 设置，已导出环境优先；空值/省略选择 v1，未注册名称也按阶段设计回退到 v1。启动日志及 `GET /health` 的 `loop_impl` 显示实际选择，便于发现回退。
+`backend/loop_registry.go` 定义统一的 `LoopImpl(context.Context, ChatRequest, emit) error`，保留 HTTP 请求的取消和超时。注册 `v1` 与预算版 `v2`，默认仍为 `v1`，直接进入现有持久化单轮服务；SSE 和 JSON 都在共享入口 `processRequestContext` 中选择一次实现，错误仍走同一分类和结束事件。`LOOP_IMPL` 可通过环境或本地 .env 设置，已导出环境优先；空值/省略选择 v1，未注册名称也按阶段设计回退到 v1。启动日志及 `GET /health` 的 `loop_impl` 显示实际选择，便于发现回退。
 
-`registerLoop` 为后端代码扩展点，拒绝空名、空实现和重复注册，读写锁保护注册与选择。后续压缩版可注册为 v2，再由环境切换；**当前生产二进制未注册 v2、没有压缩实现或按用户哈希分桶**，测试里的 v2 是临时假实现。新增实现必须遵守同一单轮持久化/幂等、取消和完整工具批次提交边界；分流键不进入客户端协议或轮次指纹，既有 v1 成功轮保持回放兼容。实现切换不应改变已经提交的轮次；pending 重试期间保持实现和路由配置稳定，不能将这个钩子理解为自动跨版本数据迁移。
+`registerLoop` 为后端代码扩展点，拒绝空名、空实现和重复注册，读写锁保护注册与选择。后续压缩版可注册为 v2，再由环境切换；**当前 v2 先实现 Phase 5 Part 1 的预算/触发，摘要压缩待 Part 2；无用户哈希分桶**，测试里的 v2 是临时假实现。新增实现必须遵守同一单轮持久化/幂等、取消和完整工具批次提交边界；分流键不进入客户端协议或轮次指纹，既有 v1 成功轮保持回放兼容。实现切换不应改变已经提交的轮次；pending 重试期间保持实现和路由配置稳定，不能将这个钩子理解为自动跨版本数据迁移。
 
 ```bash
 LOOP_IMPL=v1 LLM_PROVIDER=mock bash run_backend.sh
-# 默认生产构建中，下行尚未注册 v2，会回退到 v1；health 显示 loop_impl=v1
+# v2 启用估算预算与压缩触发，health 显示 loop_impl=v2
 LOOP_IMPL=v2 LLM_PROVIDER=mock bash run_backend.sh
 ```
 
@@ -397,3 +397,7 @@ MiniCoco/
 - 后端默认监听 `127.0.0.1`，**无鉴权**，用于本地开发。`MINICOCO_HOST` 可以覆盖监听地址，当前实现不适合直接暴露到网络。
 - 文件工具拒绝路径越界和路径中的符号链接，写入通过同目录临时文件替换完成。这是应用层路径检查，不能抵御其他进程并发恶意替换父目录。
 - `run_command` 提供可信本地 shell 执行能力，`--workspace` 只设置它的工作目录，**不限制它访问工作区以外的文件或网络**。当前没有容器或操作系统级沙箱。
+
+## Phase 5 Part 1：上下文预算
+
+LOOP_IMPL=v2 启用 Go 后端估算预算：文本按 UTF-16 字符/2 向上估算，工具调用参数/身份也计入；base64 图片按 len*2/3000 向上估算（仅估算器支持，HTTP/存储仍仅文本协议）。model.maxTokens 扣除 system/tools/环境后为历史额度；严格 >0.65 micro，>0.80 full，在请求模型前返回 need_compression。真实摘要由 Part 2 接续。trimToBudget 只生成视图，保留尾部且不拆工具批次；尾部文本可截断，工具批次本身放不下则 cannot_compress。启发估算不等于供应商 tokenizer，1 MiB/512 条原有限制仍在。
