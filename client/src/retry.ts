@@ -42,8 +42,8 @@ export function backoffSleep(attempt: number, policy: RetryPolicy, signal?: Abor
 // the server. The first response's session ID is retained even if its body fails.
 export async function runRoundWithRetry(args: RoundArgs, policy: RetryPolicy = RETRY_POLICY, signal?: AbortSignal, dependencies: RetryDependencies = {}): Promise<RetryResult> {
     let sessionId = args.sessionId, attempts = 0, retries = 0;
-    const snapshot = {...args, toolUseResults: args.toolUseResults ? structuredClone(args.toolUseResults) : undefined};
-    const request = (): RoundArgs => ({...snapshot, sessionId, toolUseResults: snapshot.toolUseResults ? structuredClone(snapshot.toolUseResults) : undefined,
+    const snapshot = {...args, backgroundResults: args.backgroundResults ? structuredClone(args.backgroundResults) : undefined, toolUseResults: args.toolUseResults ? structuredClone(args.toolUseResults) : undefined};
+    const request = (): RoundArgs => ({...snapshot, sessionId, backgroundResults: snapshot.backgroundResults ? structuredClone(snapshot.backgroundResults) : undefined, toolUseResults: snapshot.toolUseResults ? structuredClone(snapshot.toolUseResults) : undefined,
         options: {...args.options, onSession: id => {sessionId = id;args.options?.onSession?.(id);}}});
     const run = dependencies.run ?? runRound;
     const fallback = dependencies.runNonStreaming ?? runRoundNonStreaming;

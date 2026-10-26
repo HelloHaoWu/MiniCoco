@@ -124,10 +124,18 @@ Phase 7 Part 2：run_command 在 macOS/Linux 下监测整个普通子进程组�
 
 RSS 是采样保护，不是内核硬限制；自行脱离进程组的恶意命令、OS 沙箱和 Windows 命令保护未实现，Windows 明确拒绝 guarded command。日志只保存已捕获限额内输出，后续输出未保存；工具回传仍受 64 KiB JSON 预算。权限提示词为软约束，强制工具审批仍执行。真实模型是否主动声明意图尚未实测。Part 1 已推送 29cf85a，Part 2 发布见 ChangeLog 009；下一步 Phase 8 Part 1，Phase 8—9 尚未实施。
 
-## 最新进度：Phase 8 Part 1（2026-10-26）
+## Phase 8 Part 1 历史验收（2026-10-26）
 
 Phase 8 Part 1：delegate_subagent__v1 工具及 explore 注册表，后端注入 enum/说明并使用阶段原文子 Agent system；客户端递归 Conversation，新 session、readonly、独立 10 轮预算，默认快模型 deepseek-flash（显式 mock 模型保持 mock），只回最终文本，未完成作为工具错误。Go 强制子会话只读，拒绝第三层派生和不同工作区；ParentSessionID/AgentType 在 JSON 和 SQLite 持久化。SQLite 新增独立 session_link 表，兼容旧 session 表，不迁移正文。CLI 恢复子会话同样锁定 readonly。
 
 本次 check.sh 与 check_realdb.sh 通过：默认零依赖、Go -race/vet/构建、TS 类型检查、10 工具自测、61 客户端测试（8 文件）；默认覆盖率 83.5%，真实档 82.3%。最后的恢复权限收紧又通过类型检查与 sessions/toolresult 9 项回归。真实 Go+CLI+本机模拟上游验证父子各两轮、子工具仅 read/list/grep、父仅收到一条报告、重开父子关系保持，以及子预算耗尽不执行最后批次；file/real 共用关系持久化和父历史隔离测试。
 
 full 七个工具，safe 排除 run_command、允许只读委派；readonly 仍只有 read/list/grep，子 Agent 不能继续委派。多个委派当前顺序执行，未实现并发子 Agent 调度。子中间步骤仅写子 transcript，不进入父历史；子失败/取消无副作用回滚。新增 run_command__v2 仅修正 Phase 7 后资源说明，参数兼容；后台任务尚未实现。无真实模型 API。Phase 7 Part 2 已推送 fd9cf37，本 Part 发布见 ChangeLog 010，下一步 Phase 8 Part 2；Phase 9 未实施。
+
+## 最新进度：Phase 8 Part 2（2026-10-26）
+
+Phase 8 Part 2：run_command__v3 增加 run_in_background；客户端 BackgroundTasks 在同一 Conversation 中启动任务，立即返回随机 UUID taskId，最多 4 个未消费任务，复用审批、RSS/超时/输出保护。完成结果 backgroundResults 携带到下一轮增量；后端校验并构建完整 task_complete/ack 配对（Native/XML），与原输入原子预占、成功提交、重试回放。客户端快照深拷贝后台增量，成功重试不重跑命令。--wait-background 等待并消费结果，取消、SIGINT/SIGTERM 和 close 清理进程组。
+
+check.sh 与 check_realdb.sh 均通过：默认零依赖、Go -race/vet/构建、TS 类型检查、10 工具自测、65 客户端测试（9 文件）。新增队列限额/立即返回/消费一次、同 session 后台结果不变重试与命令单次执行、退出后无延迟写文件；file/real 的 Native/XML 完整配对、重开回放和用量去重；真实 Go+CLI+模拟上游验证 --wait-background 后模型收到 background 和 task_complete。
+
+后台进程仅在当前客户端存活；默认单次 CLI 退出会取消尚未完成任务，需要等待消费时用 --wait-background。REPL 可跨输入接收完成结果。无持久化任务队列、崩溃后任务恢复或 SIGKILL 清理保证；task_complete 是后端内部配对，不下发为可执行模型工具。后台工具审计 ok 表示启动已接受，最终完成/失败保存在后台增量中。父子 Agent 与后台任务路径独立；子 Agent 不支持后台命令。Part 1 已推送 9a3bfd7，本 Part 发布见 ChangeLog 011，下一步 Part 3 分叉；Phase 9 未实施。

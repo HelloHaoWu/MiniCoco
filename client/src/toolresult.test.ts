@@ -164,3 +164,22 @@ test('subagent has a persisted readonly child session and returns one final resu
         }finally{await running.stop();}
     }finally{upstream.closeAllConnections();await new Promise<void>(resolve=>upstream.close(()=>resolve()));fs.rmSync(temp,{recursive:true,force:true});}
 });
+
+test('real CLI waits for background completion and backend injects task_complete in the same session', {timeout:30_000}, async()=>{
+    const temp=fs.mkdtempSync(path.join(os.tmpdir(),'minicoco-bg-cli-'));let sawComplete=false,calls=0;
+    const upstream=http.createServer(async(req,res)=>{
+        let raw='';for await(const chunk of req)raw+=chunk;const input=JSON.parse(raw);calls++;
+        const history=JSON.stringify(input.messages);sawComplete ||= history.includes('task_complete')&&history.includes('[background ')&&history.includes('bg-done');
+        const last=input.messages.at(-1);let delta:unknown,finish='stop';
+        if(calls===1){delta={tool_calls:[{index:0,id:'background',function:{name:'run_command',arguments:JSON.stringify({command:'sleep 0.15; printf x >> count; echo bg-done',run_in_background:true})}}]};finish='tool_calls';}
+        else delta={content:sawComplete?'consumed background result':'waiting for task'};
+        res.setHeader('Content-Type','text/event-stream');res.end('data: '+JSON.stringify({choices:[{delta,finish_reason:finish}]})+'\n\ndata: [DONE]\n\n');
+    });upstream.listen(0,'127.0.0.1');await once(upstream,'listening');
+    try{
+        const binary=path.join(temp,'backend');const build=spawnSync('go',['build','-o',binary,'.'],{cwd:path.join(project,'backend'),encoding:'utf8'});assert.equal(build.status,0,build.stderr);
+        const ws=path.join(temp,'workspace');fs.mkdirSync(ws);const url=`http://127.0.0.1:${(upstream.address() as {port:number}).port}`;
+        const running=await backend(binary,temp,'deepseek-flash','',url);
+        try{const result=await cli(['background work','--yes','--wait-background','--workspace',ws,'--server',running.url]);assert.equal(result.code,0,result.stderr);assert.match(result.stdout,/taskId=/);assert.match(result.stdout,/consumed background result/);assert(sawComplete);assert.equal(fs.readFileSync(path.join(ws,'count'),'utf8'),'x');assert.equal((await listSessions(running.url)).length,1);}
+        finally{await running.stop();}
+    }finally{upstream.closeAllConnections();await new Promise<void>(resolve=>upstream.close(()=>resolve()));fs.rmSync(temp,{recursive:true,force:true});}
+});

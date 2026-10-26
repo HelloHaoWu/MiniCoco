@@ -1,0 +1,24 @@
+{
+  "type": "function",
+  "availableVersion": 1,
+  "function": {
+    "name": "run_command",
+    "description": "Execute a trusted non-interactive shell command in the workspace on macOS/Linux. Not an OS sandbox. Default limits: 120s, 1.5 GiB process-group RSS sampling, 1 MiB captured output. Overflow terminates the command and saves a bounded log; returned text is capped at 64 KiB.",
+    "parameters": {
+      "type": "object",
+      "properties": {
+        "command": {
+          "type": "string",
+          "description": "The shell command to run."
+        },
+        "run_in_background": {
+          "type": "boolean",
+          "description": "Run asynchronously; immediately return a task ID. Completed results are delivered on a later round."
+        }
+      },
+      "required": [
+        "command"
+      ]
+    }
+  }
+}

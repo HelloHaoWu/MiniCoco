@@ -64,7 +64,8 @@ func (XmlFormatter) Format(results []ToolUseResult) ([]Message, error) {
 	}
 	var body strings.Builder
 	for i, result := range results {
-		if !knownTool(ToolName(result.Name)) {
+		// task_complete is a server-built acknowledgement, never a model tool.
+		if !knownTool(ToolName(result.Name)) && result.Name != "task_complete" {
 			return nil, fmt.Errorf("unknown tool result name")
 		}
 		if i > 0 {

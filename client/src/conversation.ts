@@ -1,4 +1,5 @@
 import {SUBAGENTS, SUB_MAX_ROUNDS} from './agents.ts';
+import {BackgroundTasks} from './background.ts';
 import {randomUUID, createHash} from 'node:crypto';
 import {approve, type ApprovalMode, type ApprovalPrompt} from './approval.ts';
 import {AuditClient} from './audit.ts';
@@ -18,7 +19,7 @@ export interface RunResult {
     sessionId?: string;
     message?: string;
 }
-export interface ConversationOptions { mode?: ToolMode; sessionId?: string; onSession?: (id: string) => void; retryPolicy?: RetryPolicy; retryDependencies?: RetryDependencies; approvalMode?: ApprovalMode; approvalPrompt?: ApprovalPrompt; agentType?: string; parentSessionId?: string; quiet?: boolean; }
+export interface ConversationOptions { mode?: ToolMode; sessionId?: string; onSession?: (id: string) => void; retryPolicy?: RetryPolicy; retryDependencies?: RetryDependencies; approvalMode?: ApprovalMode; approvalPrompt?: ApprovalPrompt; agentType?: string; parentSessionId?: string; quiet?: boolean; waitBackground?: boolean; }
 
 // Only session identity and an unacknowledged delta are kept here. The server
 // owns full history, budgets, input reservations and successful-round commits.
@@ -34,6 +35,7 @@ export class Conversation {
     private options: ConversationOptions;
     private pending?: {request: RoundRequest; query: string};
     private audit: AuditClient;
+    private background = new BackgroundTasks();
     private traceId = '';
 
     constructor(serverUrl: string, workspace: string, model = '', maxRounds = 25, options: ConversationOptions = {}) {
@@ -44,6 +46,7 @@ export class Conversation {
         this.serverUrl = serverUrl;
         this.audit = new AuditClient(serverUrl);
         this.ctx = new HandlerContext(workspace);
+        this.ctx.background = this.background;
         this.workspace = this.ctx.workspace;
         this.model = model;
         this.maxRounds = maxRounds;
@@ -61,7 +64,8 @@ export class Conversation {
     }
 
     private nextRequest(delta: {query: string} | {toolUseResults: ToolUseResult[]}): RoundRequest {
-        return {sessionId: this.sessionId, roundId: `${this.sessionId || 'new'}-r-${randomUUID()}`, workspace: this.workspace, model: this.model, mode: this.mode, agentType: this.options.agentType, parentSessionId: this.options.parentSessionId, ...delta};
+        const completed = this.background.takeCompleted();
+        return {sessionId: this.sessionId, roundId: `${this.sessionId || 'new'}-r-${randomUUID()}`, workspace: this.workspace, model: this.model, mode: this.mode, agentType: this.options.agentType, parentSessionId: this.options.parentSessionId, backgroundResults: completed.length ? completed : undefined, ...delta};
     }
 
     async run(query: string, signal?: AbortSignal): Promise<RunResult> {
@@ -90,6 +94,13 @@ export class Conversation {
                     if (!toolAllowed(this.mode, call.name)) throw new RoundError(`tool ${call.name} is not allowed in mode ${this.mode}`, 'protocol');
                 }
                 if (result.finish === FINISH.STOP) {
+                    if (this.options.waitBackground) await this.background.wait(signal);
+                    signal?.throwIfAborted();
+                    if (this.background.hasCompleted) {
+                        this.pending = {request: this.nextRequest({query: 'Process the completed background tasks.'}), query};
+                        if (rounds === this.maxRounds) return {status:'exhausted',text:'',rounds,sessionId:this.sessionId,message:'background results retained; round budget reached'};
+                        continue;
+                    }
                     this.pending = undefined;
                     return {status: 'completed', text: result.assistant.content ?? '', rounds, sessionId: this.sessionId};
                 }
@@ -114,6 +125,7 @@ export class Conversation {
             }
             throw new Error('unreachable round state');
         } catch (error) {
+            if (signal?.aborted) this.background.cancel();
             const message = error instanceof RoundError ? `${error.code ?? error.kind}: ${error.message} after ${error.attempts ?? 1} tries${error.traceId ? ` (trace ${error.traceId})` : ''}` : (error as Error).message;
             return {status: signal?.aborted ? 'cancelled' : 'failed', text: '', rounds, sessionId: this.sessionId || undefined, message};
         } finally {this.ctx.signal = undefined;this.running = false;}
@@ -142,5 +154,5 @@ export class Conversation {
         return result;
     }
 
-    async close(): Promise<void> {await this.audit.flush();}
+    async close(): Promise<void> {await this.background.close();await this.audit.flush();}
 }

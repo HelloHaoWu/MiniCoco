@@ -41,6 +41,9 @@ func initialSessionID(roundID string) string {
 }
 
 func validateDelta(req ChatRequest) error {
+	if err := validateBackgroundResults(req); err != nil {
+		return err
+	}
 	if (req.AgentType != "" && req.AgentType != "explore") || (req.AgentType == "") != (req.ParentSessionID == "") || (req.ParentSessionID != "" && !validSessionID(req.ParentSessionID)) {
 		return ErrStoreInvalid
 	}
@@ -123,6 +126,9 @@ func (service *sessionService) resolve(ctx context.Context, req *ChatRequest) er
 		return ErrStoreConflict
 	}
 	if session.AgentType != "" {
+		if len(req.BackgroundResults) > 0 {
+			return completionFailure(codeBadRequest, false, "subagent cannot submit background results", nil)
+		}
 		req.AgentType = session.AgentType
 		req.ParentSessionID = *session.ParentSessionID
 		req.Mode = ModeReadonly
@@ -222,14 +228,15 @@ func (service *sessionService) process(ctx context.Context, req ChatRequest, emi
 		return storageFailure(err)
 	}
 	encoded, _ := json.Marshal(struct {
-		Query            *string
-		Results          []ToolUseResult
-		Workspace, Model string
-		Mode             Mode   `json:",omitempty"`
-		ToolFormat       string `json:",omitempty"`
-		AgentType        string `json:",omitempty"`
-		ParentSessionID  string `json:",omitempty"`
-	}{req.Query, req.ToolUseResults, req.Workspace, req.Model, identityMode, formatIdentity, req.AgentType, req.ParentSessionID})
+		Query             *string
+		Results           []ToolUseResult
+		Workspace, Model  string
+		Mode              Mode               `json:",omitempty"`
+		ToolFormat        string             `json:",omitempty"`
+		AgentType         string             `json:",omitempty"`
+		ParentSessionID   string             `json:",omitempty"`
+		BackgroundResults []BackgroundResult `json:",omitempty"`
+	}{req.Query, req.ToolUseResults, req.Workspace, req.Model, identityMode, formatIdentity, req.AgentType, req.ParentSessionID, req.BackgroundResults})
 	hash := sha256.Sum256(encoded)
 	fingerprint := hex.EncodeToString(hash[:])
 	round, roundErr := service.transcript.Round(ctx, req.SessionID, req.RoundID)
@@ -272,6 +279,14 @@ func (service *sessionService) process(ctx context.Context, req ChatRequest, emi
 	input, err := incomingMessages(req, rawHistory, pickFormatter(isFunctionCall))
 	if err != nil {
 		return completionFailure(codeBadRequest, false, err.Error(), err)
+	}
+	completed, err := backgroundMessages(req, pickFormatter(isFunctionCall))
+	if err != nil {
+		return completionFailure(codeBadRequest, false, err.Error(), err)
+	}
+	input = append(input, completed...)
+	if len(completed) > 0 {
+		traceStage(ctx, "tool_result", func(r *TraceRecord) { r.Tool = "task_complete" })
 	}
 	for _, result := range req.ToolUseResults {
 		traceStage(ctx, "tool_result", func(r *TraceRecord) { r.Tool = result.Name })

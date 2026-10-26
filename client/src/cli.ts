@@ -7,15 +7,16 @@ import {normalizeMode} from './toolMode.ts';
 import type {ToolMode} from './protocol.ts';
 import {printTrace} from './trace.ts';
 
-interface Args { query: string[]; workspace: string; workspaceGiven: boolean; server: string; model: string; maxRounds: number; resume: string; list: boolean; mode: ToolMode; yes: boolean; }
+interface Args { query: string[]; workspace: string; workspaceGiven: boolean; server: string; model: string; maxRounds: number; resume: string; list: boolean; mode: ToolMode; yes: boolean; waitBackground: boolean; }
 
 function parseArgs(argv: string[]): Args {
-    const args: Args = {query: [], workspace: process.cwd(), workspaceGiven: false, server: process.env.MINICOCO_SERVER || 'http://127.0.0.1:8017', model: '', maxRounds: 25, resume: '', list: false, mode: 'full', yes: false};
+    const args: Args = {query: [], workspace: process.cwd(), workspaceGiven: false, server: process.env.MINICOCO_SERVER || 'http://127.0.0.1:8017', model: '', maxRounds: 25, resume: '', list: false, mode: 'full', yes: false, waitBackground: false};
     for (let i = 0; i < argv.length; i++) {
         const key = argv[i];
         if (key === '--') { args.query.push(...argv.slice(i + 1)); break; }
         if (key === '--list') {args.list = true;continue;}
         if (key === '--yes') {args.yes = true;continue;}
+        if (key === '--wait-background') {args.waitBackground = true;continue;}
         if (['--workspace', '--server', '--model', '--max-rounds', '--resume', '--mode'].includes(key)) {
             const value = argv[++i];
             if (!value || value.startsWith('--')) throw new Error(`${key} requires a value`);
@@ -67,7 +68,7 @@ async function main(): Promise<void> {
         if (signal?.aborted) {abort();return;}
         input.question(text, {signal}, answer => {cleanup();resolve(answer);});
     });
-    const convo = new Conversation(args.server, path.resolve(args.workspace), args.model, args.maxRounds, {mode: args.mode, sessionId: args.resume, approvalMode: args.yes ? 'yes' : terminal ? 'interactive' : 'deny', approvalPrompt: async (call, signal) => /^(y|yes)$/i.test((await question(`执行 ${call.name} ${JSON.stringify(call.arguments).slice(0,240)} ? [y/N] `, signal)).trim()), onSession: id => process.stderr.write(`\n[session] ${id}\n`)});
+    const convo = new Conversation(args.server, path.resolve(args.workspace), args.model, args.maxRounds, {mode: args.mode, sessionId: args.resume, waitBackground: args.waitBackground, approvalMode: args.yes ? 'yes' : terminal ? 'interactive' : 'deny', approvalPrompt: async (call, signal) => /^(y|yes)$/i.test((await question(`执行 ${call.name} ${JSON.stringify(call.arguments).slice(0,240)} ? [y/N] `, signal)).trim()), onSession: id => process.stderr.write(`\n[session] ${id}\n`)});
     process.stdout.write(`MiniCoco  server=${args.server}  model=${args.model || '(backend default)'}  mode=${args.mode}  workspace=${convo.workspace}\n`);
     let active: AbortController | undefined;
     let closed = false;
@@ -76,6 +77,8 @@ async function main(): Promise<void> {
         else if (rl) { closed = true; rl.close(); }
     };
     process.on('SIGINT', interrupt);
+    const terminate = (): void => {closed = true;active?.abort(new Error('terminated'));rl?.close();};
+    process.on('SIGTERM', terminate);
     const run = async (query: string): Promise<void> => {
         active = new AbortController();
         try {
@@ -102,7 +105,7 @@ async function main(): Promise<void> {
             if (query) await run(query);
             if (terminal && !closed) rl.prompt();
         }
-    } finally { rl?.close(); process.removeListener('SIGINT', interrupt); await convo.close(); }
+    } finally { rl?.close(); process.removeListener('SIGINT', interrupt); process.removeListener('SIGTERM', terminate); await convo.close(); }
 }
 
 main().catch(error => { console.error(`[client] ${(error as Error).message}`); process.exitCode = 1; });

@@ -72,5 +72,13 @@ export function executeCommand(ctx: HandlerContext, args: ToolArgs): Promise<str
 export class RunCommand extends Handler {
     requiresApproval = true;
     name = 'run_command';
-    protected run(args: ToolArgs): Promise<string> {return executeCommand(this.ctx, args);}
+    protected run(args: ToolArgs): Promise<string> | string {
+        if (args.run_in_background !== undefined && typeof args.run_in_background !== 'boolean') throw new ToolError('run_in_background must be boolean');
+        if (args.run_in_background === true) {
+            if (!this.ctx.background) throw new ToolError('background execution requires a conversation');
+            const taskId = this.ctx.background.start(signal => {const ctx = Object.create(this.ctx) as HandlerContext;ctx.signal = signal;return executeCommand(ctx, args);}, this.ctx.signal);
+            return `已在后台启动, taskId=${taskId}`;
+        }
+        return executeCommand(this.ctx, args);
+    }
 }

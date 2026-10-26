@@ -51,6 +51,7 @@ export interface Message {
 export interface ToolUseResult { id: string; name: string; output: string; isError: boolean; }
 export type ToolMode = 'full' | 'readonly' | 'safe';
 export interface RoundRequest {
+    backgroundResults?: import('./background.ts').BackgroundResult[];
     parentSessionId?: string;
     agentType?: string;
     sessionId: string;

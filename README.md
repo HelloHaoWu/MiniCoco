@@ -451,3 +451,9 @@ macOS/Linux 的 run_command 默认合并输出限额 1 MiB、进程组 RSS 采�
 full/safe 模式下模型可调用 `delegate_subagent`，目前类型为 `explore`。子会话单独持久化 parentSessionId，仅能 read_file/list_dir/grep，独立最多 10 轮；只将最后报告回父，子中间工具记录留在子会话。后端和客户端都限制子会话为 readonly，拒绝继续派生；多个委派当前顺序执行。
 
 explore 默认使用 deepseek-flash 路由；显式 mock 模型继续离线，`LLM_PROVIDER=mock` 也覆盖子调用。子模型失败/预算耗尽回错误文本，父可继续处理；无跨进程子任务恢复调度或副作用回滚。
+
+### 后台任务
+
+模型可将 run_command 的 `run_in_background` 设为 true；审批通过后立即收到 taskId。完成结果在同会话下一轮回灌，后端构建完整 task_complete 配对。最多 4 个未消费任务，资源限额与前台命令相同。
+
+单次 CLI 要等待后台结果可加 `--wait-background`（命令审批仍需交互或 `--yes`）；默认退出会取消尚未完成任务。REPL 可在后续输入消费结果。SIGINT/SIGTERM/正常退出清理进程组，强杀或进程崩溃不保证清理，也不会跨进程自动恢复任务。

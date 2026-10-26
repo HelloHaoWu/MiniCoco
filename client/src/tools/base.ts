@@ -1,6 +1,7 @@
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 import {randomUUID} from 'node:crypto';
+import type {BackgroundTasks} from '../background.ts';
 
 export const MAX_FILE_BYTES = 1024 * 1024;
 export const MAX_OUTPUT_BYTES = 64 * 1024;
@@ -46,6 +47,7 @@ export class HandlerContext {
     workspace: string;
     signal?: AbortSignal;
     delegate?: (args: ToolArgs) => Promise<string>;
+    background?: BackgroundTasks;
 
     constructor(workspace: string) {
         this.workspace = fs.realpathSync(workspace);
