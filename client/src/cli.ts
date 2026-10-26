@@ -1,3 +1,4 @@
+import {MCPManager} from './mcp.ts';
 import * as path from 'node:path';
 import * as readline from 'node:readline';
 import {Conversation} from './conversation.ts';
@@ -7,10 +8,10 @@ import {normalizeMode} from './toolMode.ts';
 import type {ToolMode} from './protocol.ts';
 import {printTrace} from './trace.ts';
 
-interface Args { query: string[]; workspace: string; workspaceGiven: boolean; server: string; model: string; maxRounds: number; resume: string; list: boolean; mode: ToolMode; yes: boolean; waitBackground: boolean; fork: boolean; forkMessage: string; slash: string; }
+interface Args { query: string[]; workspace: string; workspaceGiven: boolean; server: string; model: string; maxRounds: number; resume: string; list: boolean; mode: ToolMode; yes: boolean; waitBackground: boolean; fork: boolean; forkMessage: string; slash: string; mcpConfig: string; }
 
 function parseArgs(argv: string[]): Args {
-    const args: Args = {query: [], workspace: process.cwd(), workspaceGiven: false, server: process.env.MINICOCO_SERVER || 'http://127.0.0.1:8017', model: '', maxRounds: 25, resume: '', list: false, mode: 'full', yes: false, waitBackground: false, fork: false, forkMessage: '', slash: ''};
+    const args: Args = {query: [], workspace: process.cwd(), workspaceGiven: false, server: process.env.MINICOCO_SERVER || 'http://127.0.0.1:8017', model: '', maxRounds: 25, resume: '', list: false, mode: 'full', yes: false, waitBackground: false, fork: false, forkMessage: '', slash: '', mcpConfig: ''};
     for (let i = 0; i < argv.length; i++) {
         const key = argv[i];
         if (key === '--') { args.query.push(...argv.slice(i + 1)); break; }
@@ -18,7 +19,7 @@ function parseArgs(argv: string[]): Args {
         if (key === '--list') {args.list = true;continue;}
         if (key === '--yes') {args.yes = true;continue;}
         if (key === '--wait-background') {args.waitBackground = true;continue;}
-        if (['--workspace', '--server', '--model', '--max-rounds', '--resume', '--mode', '--message', '--slash'].includes(key)) {
+        if (['--workspace', '--server', '--model', '--max-rounds', '--resume', '--mode', '--message', '--slash', '--mcp-config'].includes(key)) {
             const value = argv[++i];
             if (!value || value.startsWith('--')) throw new Error(`${key} requires a value`);
             if (key === '--workspace') {args.workspace = value;args.workspaceGiven = true;}
@@ -27,6 +28,7 @@ function parseArgs(argv: string[]): Args {
             if (key === '--max-rounds') args.maxRounds = Number(value);
             if (key === '--resume') args.resume = value;
             if (key === '--message') args.forkMessage = value;
+            if (key === '--mcp-config') args.mcpConfig = value;
             if (key === '--slash') args.slash = value;
             if (key === '--mode') args.mode = normalizeMode(value);
         } else if (key.startsWith('--')) throw new Error(`unknown option: ${key}`);
@@ -100,6 +102,7 @@ async function main(): Promise<void> {
         } finally { active = undefined; }
     };
     try {
+        if (args.mcpConfig) {active=new AbortController();try {convo.ctx.mcp = await MCPManager.connect(path.resolve(args.mcpConfig),convo.workspace,active.signal);convo.setMCP(convo.ctx.mcp);} finally {active=undefined;}}
         if (args.query.length) { await run(args.query.join(' ')); return; }
         rl = readline.createInterface({input: process.stdin, output: process.stdout, terminal, prompt: 'you> '});
         rl.on('close', () => { closed = true; });

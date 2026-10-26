@@ -1,4 +1,4 @@
-import type {ToolMode} from './protocol.ts';
+import type {ToolMode, MCPToolSpec} from './protocol.ts';
 
 const allTools = new Set(['read_file', 'list_dir', 'grep', 'write_file', 'edit_file', 'run_command', 'delegate_subagent']);
 const writesOrExecutes = new Set(['write_file', 'edit_file', 'run_command', 'delegate_subagent']);
@@ -9,6 +9,8 @@ export function normalizeMode(value: unknown): ToolMode {
     throw new Error('mode must be full, readonly or safe');
 }
 
-export function toolAllowed(mode: ToolMode, name: string): boolean {
+export function toolAllowed(mode: ToolMode, name: string, catalog: MCPToolSpec[] = []): boolean {
+    const external = catalog.find(t => t.name === name);
+    if (external) return mode === 'full' || external.readOnly;
     return allTools.has(name) && !(mode === 'readonly' && writesOrExecutes.has(name)) && !(mode === 'safe' && name === 'run_command');
 }

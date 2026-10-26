@@ -19,3 +19,5 @@ export function commandLimits(): {outputBytes: number; rssBytes: number; timeout
     };
     return {outputBytes: positive('RUN_OUTPUT_CAP', 1024 * 1024, 64 * 1024 * 1024), rssBytes: positive('RSS_CAP', 1536 * 1024 * 1024, Number.MAX_SAFE_INTEGER), timeoutMs: positive('RUN_TIMEOUT_MS', 120_000, 86_400_000)};
 }
+
+export const MCP_TIMEOUT_MS = 30_000;

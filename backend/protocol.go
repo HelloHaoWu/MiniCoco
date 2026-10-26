@@ -33,6 +33,7 @@ type Event struct {
 // ChatRequest carries only the input for a single durable round. A round ID is
 // stable across retries; a fresh client must use fresh IDs even when resuming.
 type ChatRequest struct {
+	MCPTools          []MCPToolSpec      `json:"mcpTools,omitempty"`
 	Slash             string             `json:"slash,omitempty"`
 	BackgroundResults []BackgroundResult `json:"backgroundResults,omitempty"`
 	ParentSessionID   string             `json:"parentSessionId,omitempty"`

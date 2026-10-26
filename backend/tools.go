@@ -147,9 +147,13 @@ func buildTools(mode Mode) ([]json.RawMessage, error) {
 	return out, nil
 }
 
-func validateToolMode(mode Mode, events []Event) error {
+func validateToolMode(mode Mode, events []Event, catalogs ...[]MCPToolSpec) error {
+	var catalog []MCPToolSpec
+	if len(catalogs) > 0 {
+		catalog = catalogs[0]
+	}
 	for _, event := range events {
-		if event.Type == EvToolCall && !toolAllowed(mode, ToolName(event.Name)) {
+		if event.Type == EvToolCall && !toolAllowed(mode, ToolName(event.Name)) && !mcpAllowed(mode, event.Name, catalog) {
 			return completionFailure(codeBadRequest, false, fmt.Sprintf("tool %s is not allowed in mode %s", event.Name, mode), nil)
 		}
 	}

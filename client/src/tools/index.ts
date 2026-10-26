@@ -25,7 +25,7 @@ const REGISTRY: Record<string, HandlerCtor> = {
 
 export function createHandler(name: string, ctx: HandlerContext): Handler | null {
     const Ctor = Object.hasOwn(REGISTRY, name) ? REGISTRY[name] : undefined;
-    return Ctor ? new Ctor(ctx) : null;
+    return Ctor ? new Ctor(ctx) : ctx.mcp?.handler(name, ctx) ?? null;
 }
 
 export {Handler, HandlerContext, ToolError};

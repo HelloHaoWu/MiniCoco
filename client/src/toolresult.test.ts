@@ -203,3 +203,26 @@ test('CLI forks a committed assistant point, preserves source bytes and resumes 
         }finally{await running.stop();}
     }finally{fs.rmSync(temp,{recursive:true,force:true});}
 });
+
+test('real CLI discovers stdio MCP, sends dynamic schema and persists returned tool output', {timeout:30_000}, async()=>{
+    const temp=fs.mkdtempSync(path.join(os.tmpdir(),'minicoco-mcp-cli-'));
+    let running: Awaited<ReturnType<typeof backend>> | undefined;
+    let rounds=0;
+    const upstream=http.createServer(async(req,res)=>{
+        let raw='';for await(const chunk of req)raw+=chunk;
+        const body=JSON.parse(raw);rounds++;
+        assert.ok(body.tools.some((t:{function:{name:string}})=>t.function.name==='mcp__echo__ping'));
+        res.writeHead(200,{'Content-Type':'text/event-stream'});
+        if(rounds===1)res.end('data: '+JSON.stringify({choices:[{delta:{tool_calls:[{index:0,id:'echo-call',type:'function',function:{name:'mcp__echo__ping',arguments:'{"msg":"from-mcp"}'}}]},finish_reason:'tool_calls'}]})+'\n\ndata: [DONE]\n\n');
+        else {assert.ok(body.messages.some((m:{role:string;content:string})=>m.role==='tool'&&m.content==='from-mcp'));res.end('data: '+JSON.stringify({choices:[{delta:{content:'MCP done'},finish_reason:'stop'}]})+'\n\ndata: [DONE]\n\n');}
+    });
+    try {
+        const script=path.join(temp,'echo.cjs');fs.writeFileSync(script,`require('node:readline').createInterface({input:process.stdin}).on('line',l=>{const m=JSON.parse(l);if(!m.id)return;const result=m.method==='initialize'?{protocolVersion:'2024-11-05',capabilities:{tools:{}}}:m.method==='tools/list'?{tools:[{name:'ping',inputSchema:{type:'object',properties:{msg:{type:'string'}}}}]}:{content:[{type:'text',text:m.params.arguments.msg}]};process.stdout.write(JSON.stringify({jsonrpc:'2.0',id:m.id,result})+'\\n');});`);
+        const config=path.join(temp,'mcp.json');fs.writeFileSync(config,JSON.stringify({servers:[{name:'echo',transport:'stdio',command:process.execPath,args:[script],readOnly:true}]}));
+        upstream.listen(0,'127.0.0.1');await once(upstream,'listening');
+        const binary=path.join(temp,'backend'),build=spawnSync('go',['build','-o',binary,'.'],{cwd:path.join(project,'backend'),encoding:'utf8'});assert.equal(build.status,0,build.stderr);
+        running=await backend(binary,temp,'deepseek-flash','v2',`http://127.0.0.1:${(upstream.address() as import('node:net').AddressInfo).port}`);
+        const result=await cli(['echo','--workspace',temp,'--server',running.url,'--mcp-config',config,'--mode','readonly']);
+        assert.equal(result.code,0,result.stderr);assert.match(result.stdout,/MCP done/);assert.equal(rounds,2);
+    } finally {await running?.stop();await new Promise<void>(resolve=>upstream.close(()=>resolve()));fs.rmSync(temp,{recursive:true,force:true});}
+});

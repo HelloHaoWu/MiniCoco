@@ -478,3 +478,19 @@ explore 默认使用 deepseek-flash 路由；显式 mock 模型继续离线，`L
 ```
 
 qa/review 固定只读；composer 保留 --mode，省略或未知场景回退 composer。REPL 可在每次输入前使用 /qa、/review、/composer；同一未确认轮不能切换场景。场景与 LOOP_IMPL=v1/v2 正交，不是新的执行循环或鉴权。
+
+### 本地 MCP 工具（Phase 9 Part 2）
+
+显式传 `--mcp-config /absolute/path/mcp.json` 启动可信的本地 stdio MCP 服务；不自动执行工作区内的配置。示例：
+
+```json
+{"servers":[{"name":"echo","transport":"stdio","command":"node","args":["/absolute/path/echo.cjs"],"readOnly":true}]}
+```
+
+```bash
+./run_client.sh "使用 echo 工具" --workspace /path/to/workspace --mcp-config /path/to/mcp.json
+```
+
+客户端按 MCP 2024-11-05 握手并发现工具，名称为 `mcp__echo__ping`；配置/目录上限 64 KiB，最多 8 服务、64 工具，每个 RPC 30 秒、最多 16 并发，响应单行 1 MiB。目录随请求送到 Go，纳入预算、模式检查和同轮指纹，服务进程与工具执行均在客户端。缺失服务跳过；已发现服务断开后工具返回错误，其他工具可继续。取消发送通知，退出关闭并清理本进程组；外部工具副作用不保证取消或回滚，调用不自动重试。
+
+`readOnly` 默认 false，写类工具须审批（或显式 `--yes`）。`safe`、`readonly`、`/qa`、`/review` 只暴露 `readOnly:true` 的外部工具；这是使用者对可信服务的声明，不是运行时鉴权或沙箱。启动服务本身可执行代码，不受逐工具审批保护。explore 子 Agent 不继承 MCP；只实现 stdio，不支持 HTTP、动态目录通知或服务端主动采样。

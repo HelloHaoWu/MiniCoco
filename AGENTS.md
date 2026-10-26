@@ -59,7 +59,7 @@ Redis 提供 TTL 锁、Lua CAS 解锁、固定窗口限流和 feature_toggle 开
 
 ## 阶段与验证状态
 
-当前研发阶段：Phase 1—8 与 Phase 9 Part 1 已验收；下一步 Phase 9 Part 2。各 Part 验证和边界见末尾记录，发布见上层 ChangeLogs。
+当前研发阶段：Phase 1—8 与 Phase 9 Part 1—2 已验收；下一步 Phase 9 Part 3。各 Part 验证和边界见末尾记录，发布见上层 ChangeLogs。
 
 从仓库根目录执行，默认要求 Go ≥ 1.22、Node ≥ 24：
 
@@ -148,10 +148,18 @@ check.sh 和 check_realdb.sh 均通过：默认零依赖、Go -race/vet/构建�
 
 分叉点使用原始已提交消息序号，不是物理数据库 ID；assistant:N 包含工具调用消息，message:N 为全部原始消息序号。只复制有效且完全落在前缀内的摘要检查点，旧无范围摘要不拷贝；历史供应商费用归源会话，新分支不会重记。复制上限 16 MiB/10000 条，取消/失败可能留下未发布的孤立 transcript，不修改源；没有跨库事务或 fork 自动重试。fork 本身不请求模型，与 query 互斥，创建后单独 --resume 新 ID。后台 Part 已推送 334dfef，本 Part 发布见 ChangeLog 012，下一步 Phase 9 Part 1。
 
-## 最新进度：Phase 9 Part 1（2026-10-26）
+## Phase 9 Part 1 历史验收（2026-10-26）
 
 Phase 9 Part 1：slash 场景注册表 composer/qa/review；省略或未知回退 composer。qa/review 后端与客户端均收窄为 readonly，composer 不扩大用户 --mode；系统提示词按 family 追加阶段给定场景原文，缺后缀文件回退族提示词。场景与 LOOP_IMPL 正交，加入非默认轮次指纹和 trace；同轮不能换场景，默认 composer 保持旧指纹。CLI 支持 /qa、/review、/composer 前缀及 --slash，REPL 每次输入可选场景。
 
 check.sh 与 check_realdb.sh 通过：默认零依赖、Go -race/vet/构建、TS 类型检查、10 工具自测、67 客户端测试（10 文件）；默认覆盖率 83.3%，真实档 82.2%。两种 loop 下五种场景输入的实际上游提示词/工具清单、两族原文、缺后缀回退、同轮换场景拒绝；客户端即使 --yes 也拦截 qa/review 写操作，新增 CLI slash 传输专项 5 项回归通过。
 
 场景按本次请求选择，不保存为会话权限；--resume 可选新场景，但未确认轮必须保持场景和增量。子 Agent 始终 readonly；场景只改变提示词/工具，不新增循环实现或鉴权。Phase 8 Part 3 已推送 919837b，本 Part 发布见 ChangeLog 013；下一步 Part 2 MCP，跨会话记忆未实施。
+
+## 最新进度：Phase 9 Part 2（2026-10-26）
+
+Phase 9 Part 2：客户端 mcp.ts 实现 MCP 2024-11-05 stdio JSON-RPC 握手、分页 tools/list、命名空间目录和 tools/call；--mcp-config 显式启动可信配置，不自动执行工作区配置。目录作为增量 mcpTools 传到 Go，纳入工具清单、预算、整批模式检查和轮次指纹，重试深拷贝；SSE/JSON 共用客户端目录校验，Native/XML 回填兼容。写工具复用审批和摘要审计，safe/readonly/qa/review 只允许显式 readOnly:true 服务。
+
+check.sh 与 check_realdb.sh 均通过：默认零依赖、Go -race/vet/构建、TS 类型检查、10 工具自测、70 客户端测试（11 文件）；默认覆盖率 83.3%，真实档 82.2%。本地 mock stdio 验证握手顺序、并发 ID、取消/超时/退出、缺失服务隔离、审批和回灌；Go 验证实际目录/模式/成功回放/同轮目录改变拒绝；真实 Go+CLI+模拟上游验证 v2 下发现→调用→结果→完成。
+
+最多 8 服务/64 工具、64 KiB 配置及目录、单行 1 MiB、30 秒 RPC；输出限额和进程退出清理有界。MCP 调用不自动重试，取消通知不保证外部副作用停止。readOnly 是用户对服务的声明，服务启动本身可执行代码，无 OS 沙箱；explore 不继承 MCP。仅 stdio，不实现 HTTP、目录动态刷新或服务端主动采样。未调用真实模型 API。Part 1 已推送 d2ff728，本 Part 发布见 ChangeLog 014；下一步 Part 3 工作区记忆。

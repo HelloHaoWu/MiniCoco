@@ -64,6 +64,9 @@ func environmentText(workspace string) string {
 
 func promptParts(mode Mode, route ModelRoute) (string, []json.RawMessage, error) {
 	tools, err := buildTools(mode)
+	if err == nil {
+		tools, err = appendMCPTools(tools, mode, route.mcpTools)
+	}
 	if err != nil {
 		return "", nil, completionFailure(codeConfig, false, "cannot build tool catalog: "+err.Error(), err)
 	}

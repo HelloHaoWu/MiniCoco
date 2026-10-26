@@ -20,7 +20,7 @@ export interface RunResult {
     sessionId?: string;
     message?: string;
 }
-export interface ConversationOptions { mode?: ToolMode; sessionId?: string; onSession?: (id: string) => void; retryPolicy?: RetryPolicy; retryDependencies?: RetryDependencies; approvalMode?: ApprovalMode; approvalPrompt?: ApprovalPrompt; agentType?: string; parentSessionId?: string; quiet?: boolean; waitBackground?: boolean; slash?: string; }
+export interface ConversationOptions { mcp?: import('./mcp.ts').MCPManager; mode?: ToolMode; sessionId?: string; onSession?: (id: string) => void; retryPolicy?: RetryPolicy; retryDependencies?: RetryDependencies; approvalMode?: ApprovalMode; approvalPrompt?: ApprovalPrompt; agentType?: string; parentSessionId?: string; quiet?: boolean; waitBackground?: boolean; slash?: string; }
 
 // Only session identity and an unacknowledged delta are kept here. The server
 // owns full history, budgets, input reservations and successful-round commits.
@@ -50,6 +50,7 @@ export class Conversation {
         this.audit = new AuditClient(serverUrl);
         this.ctx = new HandlerContext(workspace);
         this.ctx.background = this.background;
+        this.ctx.mcp = options.mcp;
         this.workspace = this.ctx.workspace;
         this.model = model;
         this.maxRounds = maxRounds;
@@ -70,7 +71,7 @@ export class Conversation {
 
     private nextRequest(delta: {query: string} | {toolUseResults: ToolUseResult[]}): RoundRequest {
         const completed = this.background.takeCompleted();
-        return {sessionId: this.sessionId, roundId: `${this.sessionId || 'new'}-r-${randomUUID()}`, workspace: this.workspace, model: this.model, mode: this.mode, slash: this.slash || undefined, agentType: this.options.agentType, parentSessionId: this.options.parentSessionId, backgroundResults: completed.length ? completed : undefined, ...delta};
+        return {mcpTools: this.options.mcp?.catalog(), sessionId: this.sessionId, roundId: `${this.sessionId || 'new'}-r-${randomUUID()}`, workspace: this.workspace, model: this.model, mode: this.mode, slash: this.slash || undefined, agentType: this.options.agentType, parentSessionId: this.options.parentSessionId, backgroundResults: completed.length ? completed : undefined, ...delta};
     }
 
     async run(query: string, signal?: AbortSignal): Promise<RunResult> {
@@ -101,7 +102,7 @@ export class Conversation {
                 // Check the whole batch before any local side effect, including
                 // injected transports that bypass the normal event consumer.
                 for (const call of result.toolCalls) {
-                    if (!toolAllowed(this.mode, call.name)) throw new RoundError(`tool ${call.name} is not allowed in mode ${this.mode}`, 'protocol');
+                    if (!toolAllowed(this.mode, call.name, this.options.mcp?.catalog())) throw new RoundError(`tool ${call.name} is not allowed in mode ${this.mode}`, 'protocol');
                 }
                 if (result.finish === FINISH.STOP) {
                     if (this.options.waitBackground) await this.background.wait(signal);
@@ -149,7 +150,7 @@ export class Conversation {
         try {
             const handler = createHandler(call.name, this.ctx);
             if (!handler) throw new ToolError(`unknown tool: ${call.name}`);
-            if (!toolAllowed(this.mode, call.name)) throw new ToolError(`tool ${call.name} is not allowed in mode ${this.mode}`);
+            if (!toolAllowed(this.mode, call.name, this.options.mcp?.catalog())) throw new ToolError(`tool ${call.name} is not allowed in mode ${this.mode}`);
             approved = await approve(handler, call, this.options.approvalMode ?? 'deny', this.options.approvalPrompt);
             if (!approved) {status = 'denied';result = 'ERROR: denied by user';}
             else {result = await handler.execute(call.arguments);status = result.startsWith('ERROR:') ? 'error' : 'ok';}
@@ -164,5 +165,7 @@ export class Conversation {
         return result;
     }
 
-    async close(): Promise<void> {await this.background.close();await this.audit.flush();}
+    setMCP(mcp: import('./mcp.ts').MCPManager): void {this.options.mcp=mcp;this.ctx.mcp=mcp;}
+
+    async close(): Promise<void> {await this.background.close();await this.options.mcp?.close();await this.audit.flush();}
 }

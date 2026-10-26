@@ -48,6 +48,7 @@ export class HandlerContext {
     signal?: AbortSignal;
     delegate?: (args: ToolArgs) => Promise<string>;
     background?: BackgroundTasks;
+    mcp?: import('../mcp.ts').MCPManager;
 
     constructor(workspace: string) {
         this.workspace = fs.realpathSync(workspace);

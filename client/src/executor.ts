@@ -1,5 +1,5 @@
 import {parseSSE} from './sse.ts';
-import {EV, FINISH, type Event, type Message, type ToolCall, type RoundRequest, type ToolMode} from './protocol.ts';
+import {EV, FINISH, type Event, type Message, type ToolCall, type RoundRequest, type ToolMode, type MCPToolSpec} from './protocol.ts';
 import {normalizeMode, toolAllowed} from './toolMode.ts';
 import {RoundError, abortError} from './roundError.ts';
 import {STREAM_TIMEOUT_MS, NONSTREAM_TIMEOUT_MS} from './tuning.ts';
@@ -10,7 +10,7 @@ export interface RoundOptions { timeoutMs?: number; onEvent?: (event: Event) => 
 export interface RoundArgs extends RoundRequest { serverUrl: string; options?: RoundOptions; }
 
 // No I/O or conversation mutation: one validator for all event transports.
-export async function consumeEvents(source: Iterable<Event> | AsyncIterable<Event>, mode: ToolMode = 'full'): Promise<RoundResult> {
+export async function consumeEvents(source: Iterable<Event> | AsyncIterable<Event>, mode: ToolMode = 'full', catalog: MCPToolSpec[] = []): Promise<RoundResult> {
     mode = normalizeMode(mode);
     const text: string[] = [], toolCalls: ToolCall[] = [];
     const ids = new Set<string>();
@@ -25,7 +25,7 @@ export async function consumeEvents(source: Iterable<Event> | AsyncIterable<Even
             if (typeof event.id !== 'string' || !event.id || event.id.length > 256 || typeof event.name !== 'string' || !event.name || event.name.length > 128 ||
                 !event.arguments || typeof event.arguments !== 'object' || Array.isArray(event.arguments) || ids.has(event.id)) throw new RoundError('invalid or duplicate tool call', 'protocol');
             if (toolCalls.length >= 16) throw new RoundError('too many tool calls in one round', 'protocol');
-            if (!toolAllowed(mode, event.name)) throw new RoundError(`tool ${event.name} is not allowed in mode ${mode}`, 'protocol');
+            if (!toolAllowed(mode, event.name, catalog)) throw new RoundError(`tool ${event.name} is not allowed in mode ${mode}`, 'protocol');
             ids.add(event.id);
             toolCalls.push({id: event.id, name: event.name, arguments: event.arguments});
         } else if (event.type === EV.ERROR) {
@@ -112,11 +112,11 @@ async function executeRound(args: RoundArgs, stream: boolean, signal?: AbortSign
             try { envelope = JSON.parse(new TextDecoder('utf-8', {fatal: true}).decode(Buffer.concat(buffers))); }
             catch (cause) { throw new RoundError('invalid JSON response', 'protocol', {cause}); }
             if (!envelope || typeof envelope !== 'object' || !('events' in envelope) || !Array.isArray(envelope.events)) throw new RoundError('JSON response must contain an events array', 'protocol');
-            const result = await consumeEvents(envelope.events as Event[], mode);
+            const result = await consumeEvents(envelope.events as Event[], mode, args.mcpTools);
             for (const event of envelope.events as Event[]) render(event);
             return {...result, sessionId, traceId};
         }
-        return {...await consumeEvents(events(), mode), sessionId, traceId};
+        return {...await consumeEvents(events(), mode, args.mcpTools), sessionId, traceId};
     } catch (cause) {
         const error = signal?.aborted ? abortError(signal) : timeout.aborted ? new RoundError('model request timed out', 'timeout', {cause}) : cause instanceof RoundError ? cause : new RoundError((cause as Error).message, fetching ? 'network' : 'protocol', {cause});
         error.traceId = traceId;

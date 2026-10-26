@@ -41,6 +41,12 @@ func initialSessionID(roundID string) string {
 }
 
 func validateDelta(req ChatRequest) error {
+	if err := validateMCPTools(req.MCPTools); err != nil {
+		return err
+	}
+	if req.AgentType != "" && len(req.MCPTools) > 0 {
+		return ErrStoreInvalid
+	}
 	if len(req.Slash) > 64 {
 		return ErrStoreInvalid
 	}
@@ -130,7 +136,7 @@ func (service *sessionService) resolve(ctx context.Context, req *ChatRequest) er
 		return ErrStoreConflict
 	}
 	if session.AgentType != "" {
-		if len(req.BackgroundResults) > 0 {
+		if len(req.BackgroundResults) > 0 || len(req.MCPTools) > 0 {
 			return completionFailure(codeBadRequest, false, "subagent cannot submit background results", nil)
 		}
 		req.AgentType = session.AgentType
@@ -220,6 +226,7 @@ func (service *sessionService) process(ctx context.Context, req ChatRequest, emi
 	isFunctionCall := route.IsFunctionCall
 	route.agentType = req.AgentType
 	route.scene = req.Slash
+	route.mcpTools = req.MCPTools
 	ctx = context.WithValue(ctx, modelRouteContextKey{}, route)
 	formatIdentity := ""
 	if !isFunctionCall {
@@ -243,7 +250,8 @@ func (service *sessionService) process(ctx context.Context, req ChatRequest, emi
 		ParentSessionID   string             `json:",omitempty"`
 		BackgroundResults []BackgroundResult `json:",omitempty"`
 		Slash             string             `json:",omitempty"`
-	}{req.Query, req.ToolUseResults, req.Workspace, req.Model, identityMode, formatIdentity, req.AgentType, req.ParentSessionID, req.BackgroundResults, req.Slash})
+		MCPTools          []MCPToolSpec      `json:",omitempty"`
+	}{req.Query, req.ToolUseResults, req.Workspace, req.Model, identityMode, formatIdentity, req.AgentType, req.ParentSessionID, req.BackgroundResults, req.Slash, req.MCPTools})
 	hash := sha256.Sum256(encoded)
 	fingerprint := hex.EncodeToString(hash[:])
 	round, roundErr := service.transcript.Round(ctx, req.SessionID, req.RoundID)
@@ -374,7 +382,7 @@ func (service *sessionService) process(ctx context.Context, req ChatRequest, emi
 	if err := ctx.Err(); err != nil {
 		return err
 	}
-	if err := validateToolMode(mode, buffer.events); err != nil {
+	if err := validateToolMode(mode, buffer.events, req.MCPTools); err != nil {
 		return err
 	}
 	reply, err := replyFromEvents(buffer.events)

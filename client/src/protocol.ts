@@ -50,7 +50,9 @@ export interface Message {
 // before selecting Native/XML presentation. Formatting never re-executes tools.
 export interface ToolUseResult { id: string; name: string; output: string; isError: boolean; }
 export type ToolMode = 'full' | 'readonly' | 'safe';
+export interface MCPToolSpec {name: string; description: string; parameters: Record<string, unknown>; readOnly: boolean;}
 export interface RoundRequest {
+    mcpTools?: MCPToolSpec[];
     slash?: string;
     backgroundResults?: import('./background.ts').BackgroundResult[];
     parentSessionId?: string;
