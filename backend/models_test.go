@@ -185,13 +185,13 @@ func TestFamilyPromptAndWorkspacePlacement(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		if len(a) != 3 || a[0]["role"] != "system" || a[1]["role"] != "user" || a[2]["content"] != "inspect" || !strings.Contains(a[1]["content"].(string), "/tmp/project-a") || strings.Contains(a[0]["content"].(string), "/tmp/project-a") || !reflect.DeepEqual(a[0], b[0]) || !reflect.DeepEqual(atools, btools) {
+		if len(a) != 4 || a[0]["role"] != "system" || a[1]["role"] != "system" || a[2]["role"] != "user" || a[3]["content"] != "inspect" || !strings.Contains(a[2]["content"].(string), "/tmp/project-a") || strings.Contains(a[0]["content"].(string), "/tmp/project-a") || !reflect.DeepEqual(a[0], b[0]) || !reflect.DeepEqual(atools, btools) {
 			t.Fatal("workspace contaminated static prompt/tools")
 		}
 	}
 	a, _, _ := genPrompt(history, "", ModeFull, ModelRoute{Family: "openai"})
 	b, _, _ := genPrompt(history, "", ModeFull, ModelRoute{Family: "claude"})
-	if reflect.DeepEqual(a[0], b[0]) || len(a) != 2 {
+	if reflect.DeepEqual(a[0], b[0]) || len(a) != 3 {
 		t.Fatal("family prompts identical or empty workspace injected")
 	}
 	if _, _, err := genPrompt(history, "", ModeFull, ModelRoute{Family: "unknown"}); err == nil {
@@ -235,7 +235,7 @@ func TestRoutingSnapshotControlsPromptFormatterAndTransport(t *testing.T) {
 	response, events := deltaResponse(t, map[string]any{"roundId": "route-first", "query": "inspect", "model": "custom", "workspace": "/tmp/routed"})
 	requireRoundFinish(t, response, events, FinishToolCalls)
 	first := <-captured
-	if !strings.Contains(first[0]["content"].(string), "# Working method") || first[1]["role"] != "user" {
+	if !strings.Contains(first[0]["content"].(string), "# Working method") || first[1]["role"] != "system" || first[2]["role"] != "user" {
 		t.Fatal("routed family not applied")
 	}
 	sid := response.Header().Get("X-Session-Id")

@@ -1,4 +1,4 @@
-export interface AuditRecord {ts: number; sessionId: string; traceId: string; tool: string; argsDigest: string; approved: boolean; status: 'ok' | 'error' | 'denied'; ms: number;}
+export interface AuditRecord {workspaceDigest?: string;ts: number; sessionId: string; traceId: string; tool: string; argsDigest: string; approved: boolean; status: 'ok' | 'error' | 'denied'; ms: number;}
 
 // Transport to the backend's shared JSONL sink. One in-flight request and a
 // bounded discard-oldest queue keep audit failures out of tool execution.
@@ -8,7 +8,7 @@ export class AuditClient {
     private server: string;
     constructor(server: string) {this.server = server.replace(/\/$/, '');}
     emit(record: AuditRecord): void {
-        if (!record.sessionId) return;
+        if (!record.sessionId && !record.workspaceDigest) return;
         if (this.queue.length === 1024) this.queue.shift();
         this.queue.push(record);
         this.writing ??= this.drain();

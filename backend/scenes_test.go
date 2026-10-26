@@ -38,7 +38,7 @@ func TestScenesRoutePromptAndToolsAcrossLoops(t *testing.T) {
 				if len(last.Tools) != 3 || !strings.Contains(content, "# Mode:") {
 					t.Fatal(content, toolNames(t, last.Tools))
 				}
-			} else if len(last.Tools) != 7 || strings.Contains(content, "# Mode:") {
+			} else if len(last.Tools) != 8 || strings.Contains(content, "# Mode:") {
 				t.Fatal(content, toolNames(t, last.Tools))
 			}
 			if slash == "qa" {

@@ -1,7 +1,7 @@
 import type {ToolMode, MCPToolSpec} from './protocol.ts';
 
-const allTools = new Set(['read_file', 'list_dir', 'grep', 'write_file', 'edit_file', 'run_command', 'delegate_subagent']);
-const writesOrExecutes = new Set(['write_file', 'edit_file', 'run_command', 'delegate_subagent']);
+const allTools = new Set(['read_file', 'list_dir', 'grep', 'write_file', 'edit_file', 'run_command', 'delegate_subagent', 'memory_write']);
+const writesOrExecutes = new Set(['write_file', 'edit_file', 'run_command', 'delegate_subagent', 'memory_write']);
 
 export function normalizeMode(value: unknown): ToolMode {
     if (value === undefined || value === '' || value === 'full') return 'full';

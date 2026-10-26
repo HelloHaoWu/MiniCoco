@@ -20,6 +20,7 @@ var embeddedModels []byte
 // not the provider's output max_tokens parameter or an enforced token counter.
 type ModelRoute struct {
 	mcpTools       []MCPToolSpec
+	memoryIndex    string
 	agentType      string
 	scene          string
 	effective      bool

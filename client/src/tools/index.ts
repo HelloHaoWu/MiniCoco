@@ -1,3 +1,4 @@
+import {MemoryWrite} from '../memory.ts';
 import {Handler, HandlerContext, ToolError} from './base.ts';
 import {ReadFile} from './readFile.ts';
 import {WriteFile} from './writeFile.ts';
@@ -21,6 +22,7 @@ const REGISTRY: Record<string, HandlerCtor> = {
     edit_file: EditFile,
     run_command: RunCommand,
     delegate_subagent: DelegateSubagent,
+    memory_write: MemoryWrite,
 };
 
 export function createHandler(name: string, ctx: HandlerContext): Handler | null {

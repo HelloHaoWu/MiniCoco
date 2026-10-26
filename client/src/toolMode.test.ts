@@ -35,9 +35,9 @@ async function cli(options: string[]): Promise<{code: number | null; stdout: str
 
 test('both event consumers enforce full/readonly/safe tool policy', async () => {
     for (const mode of ['full', 'readonly', 'safe'] as const) {
-        const allowed = mode === 'full' ? ['read_file', 'list_dir', 'grep', 'write_file', 'edit_file', 'run_command'] :
-            mode === 'safe' ? ['read_file', 'list_dir', 'grep', 'write_file', 'edit_file'] : ['read_file', 'list_dir', 'grep'];
-        for (const name of ['read_file', 'list_dir', 'grep', 'write_file', 'edit_file', 'run_command', 'unknown']) {
+        const allowed = mode === 'full' ? ['read_file', 'list_dir', 'grep', 'write_file', 'edit_file', 'run_command', 'delegate_subagent', 'memory_write'] :
+            mode === 'safe' ? ['read_file', 'list_dir', 'grep', 'write_file', 'edit_file', 'delegate_subagent', 'memory_write'] : ['read_file', 'list_dir', 'grep'];
+        for (const name of ['read_file', 'list_dir', 'grep', 'write_file', 'edit_file', 'run_command', 'delegate_subagent', 'memory_write', 'unknown']) {
             const events = [call(name), done];
             const forms = [events, (async function* () {yield* events;})()];
             for (const source of forms) {

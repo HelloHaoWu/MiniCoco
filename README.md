@@ -51,15 +51,15 @@ mock 模型走确定性的两轮循环 (list_dir -> 给结论), 证明闭环跑�
 
 | mode | 开放的工具 |
 | --- | --- |
-| full（默认） | read_file、list_dir、grep、write_file、edit_file、run_command |
-| readonly | read_file、list_dir、grep |
-| safe | read_file、list_dir、grep、write_file、edit_file |
+| full（默认） | 八个内建工具：read_file、list_dir、grep、write_file、edit_file、run_command、delegate_subagent、memory_write；另加已注册 MCP |
+| readonly | read_file、list_dir、grep；另加显式 readOnly 的 MCP |
+| safe | 除 run_command 的七个内建工具；另加显式 readOnly 的 MCP |
 
 请求体可选字段 `mode` 使用同名值，省略或空串等价 full，其他值拒绝。CLI 在本次调用的每轮请求、重试和 JSON 兜底中保持同一模式；`--resume` 不自动继承上次模式，需要再次指定 `--mode readonly` 等选项。模式不是持久化的会话权限，也不是操作系统沙箱；safe 仍允许修改文件。
 
 后端按模式过滤发给模型的工具清单，并在成功提交前检查模型返回的完整工具批次；含禁用或未知工具则整批拒绝，不提交失败轮历史，也不发出可执行工具事件。客户端 SSE/JSON 校验和本地执行入口再次检查，整批验证后才执行，避免前面合法的工具先产生副作用。同一个 roundId 改变模式会失败；省略和显式 full 保留已有成功轮的回放兼容性。
 
-工具资源现为 `backend/tools/<name>__vN.json`，`function.name` 保持原名；增加的 `availableVersion` 表示最低 Harness 协议版本，当前内部版本为 1，尚未开放客户端选择。加载器为每个工具选择**兼容版本中数值最大的 N**，再按 read/list/grep/write/edit/run_command 固定顺序输出。availableVersion 仅用于本地选择，不发给模型接口；默认 full 的六个函数定义与改造前一致。
+工具资源现为 `backend/tools/<name>__vN.json`，`function.name` 保持原名；增加的 `availableVersion` 表示最低 Harness 协议版本，当前内部版本为 1，尚未开放客户端选择。加载器为每个工具选择**兼容版本中数值最大的 N**，再按 read/list/grep/write/edit/run_command/delegate_subagent/memory_write 固定顺序输出。availableVersion 仅用于本地选择，不发给模型接口；动态 MCP 清单在内建工具后追加，memory_write 和 delegate_subagent 为后续阶段新增工具。
 
 #### 工具结果回填与调试（Phase 3 Part 2）
 
@@ -95,7 +95,7 @@ MINICOCO_DEBUG_PROMPT=1 LLM_PROVIDER=mock bash run_backend.sh
 
 `family` 选择 system_openai.txt 或 system_claude.txt；mock-claude 只演示提示词选择，未接入 Anthropic API。一个模型轮使用同一路由快照决定提示词、formatter 和上游参数。`LLM_PROVIDER=mock` 保留离线覆盖能力；空值/openai 使用路由 provider，mock 路由始终留在本地。`LLM_BASE_URL` 非空时覆盖所有 openai 路由的端点；按模型使用不同端点时应将其设为空。已提交成功轮直接回放，不因供应商环境配置失效而再次请求模型。
 
-工作区路径现在作为 system 之后的首条 user 环境消息注入（仅非空路径），不会写入 transcript。相同 family/mode 的 system 和 tools 与工作区无关；未实施供应商缓存命中/费用测量。既有 1 MiB / 512 条历史预算继续生效。
+工作区路径现在作为 system 之后的首条 user 环境消息注入（仅非空路径），不会写入 transcript。相同 family/mode/agentType/slash/Schema（含 MCP 目录）的主 system 和 tools 与工作区无关；未实施供应商缓存命中/费用测量。既有 1 MiB / 512 条历史预算继续生效。
 
 路由 `maxTokens` 是给后续预算层预留的**项目配置上限**：DeepSeek 路由沿阶段设计取 131072，mock 取 32768；本 Part 不做真实 token 计数，也不把它发成输出 `max_tokens`。它不是供应商当前窗口规格：2026-10-26 官方页面列两模型上下文 1M；0.7 为本项目路线配置，非官方编码任务推荐值。两条 DeepSeek 路由均显式禁用默认 thinking，避免尚未实现 reasoning_content 持久化/回传时破坏工具多轮。[模型规格](https://api-docs.deepseek.com/quick_start/pricing/)、[thinking 说明](https://api-docs.deepseek.com/guides/thinking_mode/)、[温度建议](https://api-docs.deepseek.com/quick_start/parameter_settings/)。未调用真实模型验证账号可用性。
 
@@ -327,8 +327,8 @@ MINICOCO_TEST_REDIS_URL=redis://127.0.0.1:6379/0 bash check_realdb.sh
 
 - `Conversation.run()` 返回 `{status, text, rounds, message?}`，状态包括 `completed`、`failed`、`exhausted`、`cancelled`。CLI 仅为正常完成打印答案，失败或耗尽返回退出码 1，取消返回 130。
 - `--max-rounds` 为 1—100 的整数，默认 25；最后一轮若仍要求工具则停止，不再执行该批工具。
-- 运行中按 Ctrl+C 取消当前请求或命令；客户端断连也会取消后端模型请求。macOS/Linux 会终止命令进程组，Windows 目前只终止直接子进程。
-- 后端已提交历史加当前轮最多 1 MiB JSON 或 512 条消息，达到预算后需新建会话；返回可执行工具批次前由后端预留结果预算，不自动删除历史中的工具调用。
+- 运行中按 Ctrl+C 取消当前请求或命令；客户端断连也会取消后端模型请求。macOS/Linux 会终止命令进程组；受保护的 run_command 在 Windows 明确拒绝执行。
+- 模型历史视图加当前轮最多 1 MiB JSON 或 512 条消息，v2 可压缩已提交历史；原始 transcript 不删除，无法安全压缩时明确失败；返回可执行工具批次前由后端预留结果预算，不自动删除历史中的工具调用。
 - 单个文本文件读写最多 1 MiB；工具结果最多 64 KiB（同时限制 JSON 编码大小），截断时明确标记；命令输出超限则终止该命令并返回工具错误。
 - `read_file` 每次最多返回 2000 行；`list_dir` 最多列出 2000 项。`grep` 最多遍历 2000 项、32 层、8 MiB 文件内容、返回 200 个匹配；跳过符号链接、过大文件、二进制内容和超过 4096 字符的行，并报告限制。
 - 搜索在独立 Worker 中执行，5 秒超时并支持取消；命令超时 120 秒；模型超时 120 秒，客户端请求超时 125 秒。
@@ -362,6 +362,11 @@ MiniCoco/
 │   ├── loop_registry.go          #   同形状单轮实现注册、LOOP_IMPL 分流与 v1 回退
 │   ├── loop_registry_test.go     #   双传输分流、取消、回放与配置验收
 │   ├── prompt_cache_test.go      #   静态段 hash、上游字节、追加历史与模拟缓存验收
+│   ├── trace.go / trace_http.go / jsonl_sink.go # 追踪、查询与异步落盘
+│   ├── audit.go / fork.go         # 审计接收、完整历史分叉
+│   ├── subagents.go / background.go # 子会话策略、后台结果配对
+│   ├── scenes.go / mcp.go / memory.go # 场景、动态目录与记忆注入
+│   ├── context_budget.go / compression.go # v2 估算、摘要和安全压缩
 │   ├── models.go / models.json   #   模型路由、能力与配置校验（内嵌默认表）
 │   ├── prompts/system_*.txt      #   openai / claude 模型族提示词（编译嵌入）
 │   └── tools/*__vN.json          #   带 availableVersion 的工具资源，输出标准 function Schema
@@ -375,10 +380,13 @@ MiniCoco/
 │       ├── sse.ts                #   SSE 解析
 │       ├── protocol.ts           #   与后端共用的事件类型
 │       ├── toolMode.ts           #   客户端模式与执行范围校验
+│       ├── approval.ts / audit.ts # 审批与摘要审计
+│       ├── agents.ts / background.ts # 子 Agent 与后台任务
+│       ├── scenes.ts / mcp.ts / memory.ts # 场景、本地 MCP、工作区记忆
 │       ├── selftest.ts           #   本地工具离线自测
 │       └── tools/
 │           ├── index.ts          #     createHandler 注册表
-│           ├── base.ts           #     Handler 基类 + 工作区沙箱
+│           ├── base.ts           #     Handler 基类 + 应用层路径检查
 │           └── readFile / writeFile / editFile / listDir / grep / runCommand
 ├── run_backend.sh / run_backend_realdb.sh / run_client.sh
 └── check.sh / check_default_deps.sh / check_realdb.sh
@@ -388,8 +396,8 @@ MiniCoco/
 
 - **历史放后端**：服务端从持久化 transcript 读取历史，客户端只提交增量；三个接口分离元数据、正文与协调。默认 JSON/JSONL/进程内实现便于离线运行，可选 SQLite/MongoDB/Redis 档保留同样的轮次和去重语义。
 - **原生 function calling**：直接用模型的 `tools` / `tool_calls`。真实前后端设计 还支持 XML 风格工具协议、prompt cache、ABTest 分流等。
-- **逐步完善实现**：已实现模型请求重试、一次性 JSON 兜底、会话持久化/恢复、可选真实库档、工具版本/模式、Native/XML 结果回填、按模型名路由/模型族提示词、单轮实现注册、静态前缀验收和可选 v2 上下文工程；尚未实现 XML 工具调用解析、按任务自动选模、tracing、权限审批、memory、subagent / MCP。使用明确的预算和失败状态控制基本边界。
-- **工具集**：保留 6 个核心工具。新增工具时提供带版本/元数据的 JSON，更新后端 ToolName、固定顺序与模式策略，并在客户端增加 Handler、注册表和模式策略，补齐两端回归；仅放一个 JSON 不会自动开放执行。
+- **逐步完善实现**：已实现模型请求重试、一次性 JSON 兜底、会话持久化/恢复、可选真实库档、工具版本/模式、Native/XML 结果回填、按模型名路由/模型族提示词、单轮实现注册、静态前缀验收和可选 v2 上下文工程；Phase 6—9 已增加 trace/usage、审批审计、进程资源保护、子 Agent、后台任务、分叉、slash 场景、stdio MCP 和工作区记忆。尚未实现 XML 工具调用解析和通用按任务自动选模。使用明确的预算和失败状态控制基本边界。
+- **工具集**：八个内建工具和显式配置的 MCP 工具。新增工具时提供带版本/元数据的 JSON，更新后端 ToolName、固定顺序与模式策略，并在客户端增加 Handler、注册表和模式策略，补齐两端回归；仅放一个 JSON 不会自动开放执行。
 - **语言**：真实后端是 Java；这里用 Go 保持「编译型、单二进制、无框架」的最小形态，前端沿用 TypeScript。
 
 ## 安全说明
@@ -410,7 +418,7 @@ MiniCoco/
 
 Part 1 已验收并推送 d3c0f5d，见 ChangeLog 004。Part 2 两档完整验收通过：默认零依赖、空模块缓存/禁用下载/无 cgo、Go -race/vet/构建、TS 类型检查、10 项工具自测及 52 项客户端测试（6 文件）通过，Go 覆盖率 84.6%；真实档 -race/vet/无 cgo/驱动包含检查通过，覆盖率 83.1%。新增 6 项默认 Go 顶层压缩专项（含子用例）、真实档共享压缩持久化/重开/摘要用量恢复专项、1 项长会话真实 CLI 重启恢复测试。临时独立端口 MongoDB/Redis 已停止；未调用真实模型 API。Part 2 发布见 ChangeLog 2026-10-26-005。
 
-当前资料 Phase 1—5 共 17 个文件；Phase 1—5 现有 Part 已实施，Phase 6 未收到。未实现 OS 沙箱、跨进程工具日志/副作用 exactly-once、XML 工具调用解析、原生 Anthropic 协议或真实缓存收益验证。摘要是有损视图，语义质量尚无真实模型实测；默认文件档仍整文件重写，长期原始日志与摘要文件会增长，当前无物理日志清理。1 MiB/512 条限制应用于模型视图，已有工具结果/请求大小限制不变。
+当前路线资料 Phase 1—9 共 30 个文件；各 Part 的实现、验收及边界详见 AGENTS.md 和对应章节。未实现 OS 沙箱、跨进程工具日志/副作用 exactly-once、XML 工具调用解析、原生 Anthropic 协议或真实缓存收益验证。摘要是有损视图，语义质量尚无真实模型实测；默认文件档仍整文件重写，长期原始日志与摘要文件会增长，当前无物理日志清理。1 MiB/512 条限制应用于模型视图，已有工具结果/请求大小限制不变。
 
 启用方式（从仓库根目录）：
 
@@ -494,3 +502,19 @@ qa/review 固定只读；composer 保留 --mode，省略或未知场景回退 co
 客户端按 MCP 2024-11-05 握手并发现工具，名称为 `mcp__echo__ping`；配置/目录上限 64 KiB，最多 8 服务、64 工具，每个 RPC 30 秒、最多 16 并发，响应单行 1 MiB。目录随请求送到 Go，纳入预算、模式检查和同轮指纹，服务进程与工具执行均在客户端。缺失服务跳过；已发现服务断开后工具返回错误，其他工具可继续。取消发送通知，退出关闭并清理本进程组；外部工具副作用不保证取消或回滚，调用不自动重试。
 
 `readOnly` 默认 false，写类工具须审批（或显式 `--yes`）。`safe`、`readonly`、`/qa`、`/review` 只暴露 `readOnly:true` 的外部工具；这是使用者对可信服务的声明，不是运行时鉴权或沙箱。启动服务本身可执行代码，不受逐工具审批保护。explore 子 Agent 不继承 MCP；只实现 stdio，不支持 HTTP、动态目录通知或服务端主动采样。
+
+### 工作区记忆（Phase 9 Part 3）
+
+```bash
+# TTY 会询问；自动化写入需显式 --yes，非 TTY 默认拒绝
+./run_client.sh --workspace /path/to/workspace --remember "用户偏好 4 空格缩进" --yes
+./run_client.sh "检查当前实现并参考相关记忆" --workspace /path/to/workspace
+```
+
+记忆存于**客户端工作区** `data/memory/`，不同工作区互相隔离；与后端 `MINICOCO_DATA_DIR` 无关。`MEMORY.md` 是索引，每行最多 150 个 Unicode 字符、总计 16 KiB。条目正文最多 64 KiB，含 name/description/type frontmatter；类型为 user/project/preference，CLI --remember 默认 preference。`memory_write` 用稳定 name 的 SHA-256 前 24 位作为文件名，同名更新；`operation:"delete"` 配合 name 删除条目和索引。
+
+每个新轮次客户端读取索引，作为 `memoryIndex` 随请求传送；Go 在主 system 之后、环境 user 之前添加阶段规定的独立 system-reminder。只注入索引，正文通过 read_file 按需读取。索引纳入 v2 固定预算和单轮指纹，重试保留同一快照；下一轮可看到更新。无效/超限/不可读索引会在客户端明确提示并省略，避免已执行工具因构建下一轮失败而重复执行。主 system/tools 的静态前缀与索引无关，但动态 reminder 改变后，完整消息前缀不再相同。
+
+memory_write 属于 full/safe 的写工具，readonly/qa/review 禁止。TTY 询问、--yes 放行、默认非 TTY 拒绝，均发送摘要审计；--remember 不请求模型/创建会话，审计使用 workspaceDigest，后端不可达时仍是 best effort。保存先原子替换条目再替换索引，删除先索引后条目；无两文件事务，失败可能留下未索引条目，单工作区记忆只支持一个写入客户端。可用已有文件工具编辑人工条目，仍受审批和路径检查。
+
+本地模拟闭环已验证“记忆条目→读当前代码→采用当前代码”的可执行流程和原文提示词。真实模型是否正确识别陈旧记忆、摘要语义质量、供应商缓存收益尚未实测；记忆是提示上下文，不是事实校验器。会话分叉不会复制工作区记忆，同一工作区的新会话/分支共享其当前索引。

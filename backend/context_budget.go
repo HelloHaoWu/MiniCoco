@@ -90,7 +90,7 @@ func budgetFor(history []Message, workspace string, mode Mode, route ModelRoute)
 	if err != nil {
 		return tokenBudget{}, err
 	}
-	base := textTokens(system) + textTokens(string(raw))
+	base := textTokens(system) + textTokens(string(raw)) + textTokens(memoryReminder(route.memoryIndex))
 	if workspace != "" {
 		base += textTokens(environmentText(workspace))
 	}

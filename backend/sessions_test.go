@@ -140,7 +140,7 @@ func TestSessionTransientRetriesReuseOnePendingAndReportUpstreamUsage(t *testing
 		if err := json.NewDecoder(request.Body).Decode(&payload); err != nil {
 			t.Fatal(err)
 		}
-		if len(payload.Messages) != 2 || payload.Messages[1]["role"] != "user" {
+		if len(payload.Messages) != 3 || payload.Messages[1]["role"] != "system" || payload.Messages[2]["role"] != "user" {
 			t.Fatalf("retry duplicated input: %#v", payload.Messages)
 		}
 		status, body := 503, `{"error":"temporary"}`

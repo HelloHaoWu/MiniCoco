@@ -1,3 +1,4 @@
+import {readMemoryIndex} from './memory.ts';
 import {sceneFor, sceneMode, parseSceneQuery} from './scenes.ts';
 import {SUBAGENTS, SUB_MAX_ROUNDS} from './agents.ts';
 import {BackgroundTasks} from './background.ts';
@@ -70,8 +71,10 @@ export class Conversation {
     }
 
     private nextRequest(delta: {query: string} | {toolUseResults: ToolUseResult[]}): RoundRequest {
+        let memoryIndex: string | undefined;
+        try {memoryIndex=readMemoryIndex(this.ctx) || undefined;} catch {process.stderr.write('[memory] invalid or unreadable index; omitted from this round\n');}
         const completed = this.background.takeCompleted();
-        return {mcpTools: this.options.mcp?.catalog(), sessionId: this.sessionId, roundId: `${this.sessionId || 'new'}-r-${randomUUID()}`, workspace: this.workspace, model: this.model, mode: this.mode, slash: this.slash || undefined, agentType: this.options.agentType, parentSessionId: this.options.parentSessionId, backgroundResults: completed.length ? completed : undefined, ...delta};
+        return {memoryIndex, mcpTools: this.options.mcp?.catalog(), sessionId: this.sessionId, roundId: `${this.sessionId || 'new'}-r-${randomUUID()}`, workspace: this.workspace, model: this.model, mode: this.mode, slash: this.slash || undefined, agentType: this.options.agentType, parentSessionId: this.options.parentSessionId, backgroundResults: completed.length ? completed : undefined, ...delta};
     }
 
     async run(query: string, signal?: AbortSignal): Promise<RunResult> {
@@ -158,7 +161,7 @@ export class Conversation {
             if (this.ctx.signal?.aborted) throw error;
             result = `ERROR: ${(error as Error).message}`;
         } finally {
-            this.audit.emit({ts: Date.now(), sessionId: this.sessionId, traceId: this.traceId, tool: call.name, argsDigest: createHash('sha1').update(JSON.stringify(call.arguments)).digest('hex').slice(0, 12), approved, status, ms: Math.max(0, Math.round(performance.now() - start))});
+            this.audit.emit({workspaceDigest: createHash('sha256').update(this.workspace).digest('hex').slice(0,12), ts: Date.now(), sessionId: this.sessionId, traceId: this.traceId, tool: call.name, argsDigest: createHash('sha1').update(JSON.stringify(call.arguments)).digest('hex').slice(0, 12), approved, status, ms: Math.max(0, Math.round(performance.now() - start))});
         }
         result = boundedOutput(result);
         if (!this.options.quiet) process.stdout.write(result.slice(0, 240) + (result.length > 240 ? '...\n' : '\n'));

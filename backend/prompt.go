@@ -25,8 +25,8 @@ func genPrompt(history []map[string]any, workspace string, mode Mode, route Mode
 	}
 	// Keep this system/tools pair independent of per-request data. Append the
 	// environment and chronological history without rewriting their prefix.
-	messages := make([]map[string]any, 0, len(history)+2)
-	messages = append(messages, map[string]any{"role": "system", "content": system})
+	messages := make([]map[string]any, 0, len(history)+3)
+	messages = append(messages, map[string]any{"role": "system", "content": system}, map[string]any{"role": "system", "content": memoryReminder(route.memoryIndex)})
 	if workspace != "" {
 		messages = append(messages, map[string]any{"role": "user", "content": environmentText(workspace)})
 	}
@@ -78,6 +78,11 @@ func promptParts(mode Mode, route ModelRoute) (string, []json.RawMessage, error)
 		return "", nil, completionFailure(codeConfig, false, "unsupported prompt family", nil)
 	}
 	prompt = appendScenePrompt(prompt, promptsFS, route.Family, route.scene)
+	memory, err := promptsFS.ReadFile("prompts/memory.txt")
+	if err != nil {
+		return "", nil, err
+	}
+	prompt = append(append(prompt, '\n'), memory...)
 	permissions, err := promptsFS.ReadFile("prompts/permissions.txt")
 	if err != nil {
 		return "", nil, err

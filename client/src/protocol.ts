@@ -53,6 +53,7 @@ export type ToolMode = 'full' | 'readonly' | 'safe';
 export interface MCPToolSpec {name: string; description: string; parameters: Record<string, unknown>; readOnly: boolean;}
 export interface RoundRequest {
     mcpTools?: MCPToolSpec[];
+    memoryIndex?: string;
     slash?: string;
     backgroundResults?: import('./background.ts').BackgroundResult[];
     parentSessionId?: string;

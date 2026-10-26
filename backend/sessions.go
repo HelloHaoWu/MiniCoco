@@ -41,6 +41,9 @@ func initialSessionID(roundID string) string {
 }
 
 func validateDelta(req ChatRequest) error {
+	if err := validateMemoryIndex(req.MemoryIndex); err != nil {
+		return err
+	}
 	if err := validateMCPTools(req.MCPTools); err != nil {
 		return err
 	}
@@ -227,6 +230,7 @@ func (service *sessionService) process(ctx context.Context, req ChatRequest, emi
 	route.agentType = req.AgentType
 	route.scene = req.Slash
 	route.mcpTools = req.MCPTools
+	route.memoryIndex = req.MemoryIndex
 	ctx = context.WithValue(ctx, modelRouteContextKey{}, route)
 	formatIdentity := ""
 	if !isFunctionCall {
@@ -251,7 +255,8 @@ func (service *sessionService) process(ctx context.Context, req ChatRequest, emi
 		BackgroundResults []BackgroundResult `json:",omitempty"`
 		Slash             string             `json:",omitempty"`
 		MCPTools          []MCPToolSpec      `json:",omitempty"`
-	}{req.Query, req.ToolUseResults, req.Workspace, req.Model, identityMode, formatIdentity, req.AgentType, req.ParentSessionID, req.BackgroundResults, req.Slash, req.MCPTools})
+		MemoryIndex       string             `json:",omitempty"`
+	}{req.Query, req.ToolUseResults, req.Workspace, req.Model, identityMode, formatIdentity, req.AgentType, req.ParentSessionID, req.BackgroundResults, req.Slash, req.MCPTools, req.MemoryIndex})
 	hash := sha256.Sum256(encoded)
 	fingerprint := hex.EncodeToString(hash[:])
 	round, roundErr := service.transcript.Round(ctx, req.SessionID, req.RoundID)

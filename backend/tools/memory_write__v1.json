@@ -1,0 +1,20 @@
+{
+  "type": "function",
+  "availableVersion": 1,
+  "function": {
+    "name": "memory_write",
+    "description": "Save or update a durable workspace memory and its concise index. Requires approval. Verify stale memories against current code. Use the same name to update or delete; operation=delete requires only name. Do not save transient task state or facts already in project docs.",
+    "parameters": {
+      "type": "object",
+      "properties": {
+        "name": {"type": "string", "description": "Stable human title, one line, at most 128 characters"},
+        "description": {"type": "string", "description": "One line relevance hint"},
+        "type": {"type": "string", "enum": ["user", "project", "preference"]},
+        "body": {"type": "string"},
+        "operation": {"type": "string", "enum": ["write", "delete"], "default": "write"}
+      },
+      "required": ["name"],
+      "additionalProperties": false
+    }
+  }
+}

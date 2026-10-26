@@ -226,3 +226,33 @@ test('real CLI discovers stdio MCP, sends dynamic schema and persists returned t
         assert.equal(result.code,0,result.stderr);assert.match(result.stdout,/MCP done/);assert.equal(rounds,2);
     } finally {await running?.stop();await new Promise<void>(resolve=>upstream.close(()=>resolve()));fs.rmSync(temp,{recursive:true,force:true});}
 });
+
+test('CLI memory persists across sessions, injects only index, reads entries/code and audits approval', {timeout:30_000}, async()=>{
+    const temp=fs.mkdtempSync(path.join(os.tmpdir(),'minicoco-memory-cli-'));
+    let running: Awaited<ReturnType<typeof backend>> | undefined;
+    let rounds=0,index='',entry='';
+    const upstream=http.createServer(async(req,res)=>{
+        let raw='';for await(const chunk of req)raw+=chunk;const body=JSON.parse(raw);rounds++;
+        assert.match(body.messages[0].content,/# Memory/);assert.equal(body.messages[1].role,'system');assert.ok(body.messages[1].content.includes('<MEMORY.md>\n'+index+'\n</MEMORY.md>'));assert.equal(body.messages[2].role,'user');
+        if(rounds===1) {assert.ok(!body.messages.some((m:{content?:string})=>m.content?.includes('obsolete_unique_fact')));assert.equal(body.tools.some((t:{function:{name:string}})=>t.function.name==='memory_write'),false);}
+        if(rounds===2) assert.match(body.messages.at(-1).content,/obsolete_unique_fact/);
+        if(rounds===3) assert.match(body.messages.at(-1).content,/current_fn/);
+        const delta=rounds<3 ? {tool_calls:[{index:0,id:'read-'+rounds,type:'function',function:{name:'read_file',arguments:JSON.stringify({target_file:rounds===1?'data/memory/'+entry:'code.ts'})}}]} : {content:'Current code wins; legacy function is absent.'};
+        res.writeHead(200,{'Content-Type':'text/event-stream'});res.end('data: '+JSON.stringify({choices:[{delta,finish_reason:rounds<3?'tool_calls':'stop'}]})+'\n\ndata: [DONE]\n\n');
+    });
+    try {
+        upstream.listen(0,'127.0.0.1');await once(upstream,'listening');
+        const binary=path.join(temp,'backend'),build=spawnSync('go',['build','-o',binary,'.'],{cwd:path.join(project,'backend'),encoding:'utf8'});assert.equal(build.status,0,build.stderr);
+        const workspace=path.join(temp,'workspace');fs.mkdirSync(workspace);fs.writeFileSync(path.join(workspace,'code.ts'),'export function current_fn() {}');
+        running=await backend(binary,temp,'deepseek-flash','v2',`http://127.0.0.1:${(upstream.address() as import('node:net').AddressInfo).port}`);
+        const body='用户偏好 4 空格缩进。'+ ' durable preference'.repeat(8)+' obsolete_unique_fact: legacy_fn exists in code.ts';
+        const common=['--workspace',workspace,'--server',running.url];
+        const denied=await cli(['--remember',body,...common]);assert.equal(denied.code,1,denied.stderr);assert.equal(fs.existsSync(path.join(workspace,'data/memory')),false);
+        const saved=await cli(['--remember',body,'--yes',...common]);assert.equal(saved.code,0,saved.stderr);assert.equal(rounds,0);
+        index=fs.readFileSync(path.join(workspace,'data/memory/MEMORY.md'),'utf8');entry=/\]\(([^)]+)\)/.exec(index)![1];
+        assert.match(fs.readFileSync(path.join(workspace,'data/memory',entry),'utf8'),/^---\nname:/);
+        const result=await cli(['inspect memory','--mode','readonly',...common]);assert.equal(result.code,0,result.stderr);assert.match(result.stdout,/Current code wins/);assert.equal(rounds,3);
+        const audit=fs.readFileSync(path.join(temp,'data/audit.jsonl'),'utf8').trim().split('\n').map(l=>JSON.parse(l));
+        assert.ok(audit.some(r=>r.tool==='memory_write'&&r.status==='denied'&&r.workspaceDigest&&!r.sessionId));assert.ok(audit.some(r=>r.tool==='memory_write'&&r.status==='ok'));assert.ok(!JSON.stringify(audit).includes('obsolete_unique_fact'));
+    } finally {await running?.stop();await new Promise<void>(resolve=>upstream.close(()=>resolve()));fs.rmSync(temp,{recursive:true,force:true});}
+});

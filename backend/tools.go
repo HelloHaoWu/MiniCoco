@@ -18,11 +18,12 @@ const (
 	EditFile         ToolName = "edit_file"
 	RunCommand       ToolName = "run_command"
 	DelegateSubagent ToolName = "delegate_subagent"
+	MemoryWrite      ToolName = "memory_write"
 )
 
 // Explicit declaration order, independent of directory or map iteration order.
-var toolOrder = [...]ToolName{ReadFile, ListDir, Grep, WriteFile, EditFile, RunCommand, DelegateSubagent}
-var writesOrExecutes = map[ToolName]bool{WriteFile: true, EditFile: true, RunCommand: true, DelegateSubagent: true}
+var toolOrder = [...]ToolName{ReadFile, ListDir, Grep, WriteFile, EditFile, RunCommand, DelegateSubagent, MemoryWrite}
+var writesOrExecutes = map[ToolName]bool{WriteFile: true, EditFile: true, RunCommand: true, DelegateSubagent: true, MemoryWrite: true}
 
 // availableVersion is the minimum harness version, not the schema file version.
 // The current harness advertises v1; client-controlled version selection is reserved.

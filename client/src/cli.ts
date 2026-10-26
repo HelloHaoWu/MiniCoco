@@ -1,3 +1,4 @@
+import {rememberArgs} from './memory.ts';
 import {MCPManager} from './mcp.ts';
 import * as path from 'node:path';
 import * as readline from 'node:readline';
@@ -8,10 +9,10 @@ import {normalizeMode} from './toolMode.ts';
 import type {ToolMode} from './protocol.ts';
 import {printTrace} from './trace.ts';
 
-interface Args { query: string[]; workspace: string; workspaceGiven: boolean; server: string; model: string; maxRounds: number; resume: string; list: boolean; mode: ToolMode; yes: boolean; waitBackground: boolean; fork: boolean; forkMessage: string; slash: string; mcpConfig: string; }
+interface Args { query: string[]; workspace: string; workspaceGiven: boolean; server: string; model: string; maxRounds: number; resume: string; list: boolean; mode: ToolMode; yes: boolean; waitBackground: boolean; fork: boolean; forkMessage: string; slash: string; mcpConfig: string; remember: string; }
 
 function parseArgs(argv: string[]): Args {
-    const args: Args = {query: [], workspace: process.cwd(), workspaceGiven: false, server: process.env.MINICOCO_SERVER || 'http://127.0.0.1:8017', model: '', maxRounds: 25, resume: '', list: false, mode: 'full', yes: false, waitBackground: false, fork: false, forkMessage: '', slash: '', mcpConfig: ''};
+    const args: Args = {query: [], workspace: process.cwd(), workspaceGiven: false, server: process.env.MINICOCO_SERVER || 'http://127.0.0.1:8017', model: '', maxRounds: 25, resume: '', list: false, mode: 'full', yes: false, waitBackground: false, fork: false, forkMessage: '', slash: '', mcpConfig: '', remember: ''};
     for (let i = 0; i < argv.length; i++) {
         const key = argv[i];
         if (key === '--') { args.query.push(...argv.slice(i + 1)); break; }
@@ -19,7 +20,7 @@ function parseArgs(argv: string[]): Args {
         if (key === '--list') {args.list = true;continue;}
         if (key === '--yes') {args.yes = true;continue;}
         if (key === '--wait-background') {args.waitBackground = true;continue;}
-        if (['--workspace', '--server', '--model', '--max-rounds', '--resume', '--mode', '--message', '--slash', '--mcp-config'].includes(key)) {
+        if (['--workspace', '--server', '--model', '--max-rounds', '--resume', '--mode', '--message', '--slash', '--mcp-config', '--remember'].includes(key)) {
             const value = argv[++i];
             if (!value || value.startsWith('--')) throw new Error(`${key} requires a value`);
             if (key === '--workspace') {args.workspace = value;args.workspaceGiven = true;}
@@ -28,6 +29,7 @@ function parseArgs(argv: string[]): Args {
             if (key === '--max-rounds') args.maxRounds = Number(value);
             if (key === '--resume') args.resume = value;
             if (key === '--message') args.forkMessage = value;
+            if (key === '--remember') args.remember = value;
             if (key === '--mcp-config') args.mcpConfig = value;
             if (key === '--slash') args.slash = value;
             if (key === '--mode') args.mode = normalizeMode(value);
@@ -45,6 +47,7 @@ async function main(): Promise<void> {
         await printTrace(server,sid,round);return;
     }
     const args = parseArgs(process.argv.slice(2));
+    if (args.remember && (args.query.length || args.fork || args.list || args.mcpConfig || args.slash)) throw new Error('--remember cannot be combined with query/fork/list/mcp-config/slash');
     if (args.forkMessage && !args.fork) throw new Error('--message requires --fork');
     if (args.fork) {
         if (!args.resume || args.query.length || args.list || args.workspaceGiven || args.model) throw new Error('--fork requires --resume <sourceSid> and cannot include a query/workspace/model/list');
@@ -102,6 +105,17 @@ async function main(): Promise<void> {
         } finally { active = undefined; }
     };
     try {
+        if (args.remember) {
+            active = new AbortController();convo.ctx.signal = active.signal;
+            try {
+                const result = await convo.runTool({id:'remember', name:'memory_write', arguments:rememberArgs(args.remember)});
+                if (result.startsWith('ERROR:')) process.exitCode = 1;
+            } catch (error) {
+                if (active.signal.aborted) process.exitCode = 130;
+                else throw error;
+            } finally {convo.ctx.signal = undefined;active = undefined;}
+            return;
+        }
         if (args.mcpConfig) {active=new AbortController();try {convo.ctx.mcp = await MCPManager.connect(path.resolve(args.mcpConfig),convo.workspace,active.signal);convo.setMCP(convo.ctx.mcp);} finally {active=undefined;}}
         if (args.query.length) { await run(args.query.join(' ')); return; }
         rl = readline.createInterface({input: process.stdin, output: process.stdout, terminal, prompt: 'you> '});

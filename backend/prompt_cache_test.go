@@ -69,10 +69,10 @@ func TestPromptCachePrefixStableAcrossWorkspacesAndRounds(t *testing.T) {
 						if baseline != cachePrefixHash(t, actual, raw) {
 							t.Fatal("static cache prefix changed with workspace/round")
 						}
-						if len(actual) != len(growing)+2 || actual[1]["role"] != "user" || !strings.Contains(actual[1]["content"].(string), workspace) || strings.Contains(actual[0]["content"].(string), workspace) {
+						if len(actual) != len(growing)+3 || actual[1]["role"] != "system" || actual[2]["role"] != "user" || !strings.Contains(actual[2]["content"].(string), workspace) || strings.Contains(actual[0]["content"].(string), workspace) {
 							t.Fatal("environment leaked into static prefix")
 						}
-						if !reflect.DeepEqual(actual[2:], growing) {
+						if !reflect.DeepEqual(actual[3:], growing) {
 							t.Fatal("prompt construction mutated history")
 						}
 						if workspace == "/tmp/prefix-a" && !reflect.DeepEqual(actual[:len(first)], first) {
@@ -164,7 +164,7 @@ func TestPromptCacheWirePrefixAppendAndReplay(t *testing.T) {
 				if !reflect.DeepEqual(second.Messages[:len(first.Messages)], first.Messages) || !reflect.DeepEqual(third.Messages[:len(second.Messages)], second.Messages) {
 					t.Fatal("upstream message prefix was rewritten")
 				}
-				if !reflect.DeepEqual(first.Messages[0], fourth.Messages[0]) || reflect.DeepEqual(first.Messages[1], fourth.Messages[1]) || !reflect.DeepEqual(first.Messages[2:], fourth.Messages[2:]) {
+				if !reflect.DeepEqual(first.Messages[:2], fourth.Messages[:2]) || reflect.DeepEqual(first.Messages[2], fourth.Messages[2]) || !reflect.DeepEqual(first.Messages[3:], fourth.Messages[3:]) {
 					t.Fatal("workspace difference escaped the environment message")
 				}
 				meta, err := service.meta.GetSession(context.Background(), sid)

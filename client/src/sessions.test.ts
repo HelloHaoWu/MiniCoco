@@ -89,7 +89,7 @@ test('real CLI --resume/--list survive backend restart and retrieve history from
                 const resumed = await cli(['next-query', '--resume', sid, '--server', running.url]);
                 assert.equal(resumed.code, 0, resumed.stderr);assert.match(resumed.stdout, /remember-key\|next-query/);
                 assert.equal(received.length, 2);
-                assert.deepEqual(received[1].map(message => message.role), ['system', 'user', 'user', 'assistant', 'user']);
+                assert.deepEqual(received[1].map(message => message.role), ['system', 'system', 'user', 'user', 'assistant', 'user']);
                 assert(received[1].every(message => !('msg_id' in message) && !('status' in message)));
                 const updated = await getSession(running.url, sid);
                 assert.equal(updated.session.total_tokens, 10);assert.equal(updated.session.message_count, 4);

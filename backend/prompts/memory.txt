@@ -1,0 +1,7 @@
+# Memory
+You have a persistent, file-based memory for this workspace under `data/memory/`.
+- `MEMORY.md` is the always-loaded index; each line points to one entry file `data/memory/<name>.md`.
+- The index is injected in a <system-reminder> below. When an entry looks relevant, read its file with `read_file data/memory/<name>.md` before you rely on it.
+- Treat every entry as "true when it was written": verify against the current code before acting; if it conflicts, trust the code and update or delete the stale entry.
+- Save a memory when the user tells you to, or when you learn a durable fact about the user (role, preferences), the project (goals, constraints, conventions), or an external resource. To save: write `data/memory/<name>.md` with the frontmatter above, then add one `- [Title](name.md) — hook` line to `MEMORY.md`.
+- Do NOT save: things derivable from code or git history; transient task state; anything already in project docs. Keep the index concise.
