@@ -34,10 +34,10 @@ func TestBuildToolsModesAndStableOrder(t *testing.T) {
 		mode Mode
 		want []string
 	}{
-		{"", []string{"read_file", "list_dir", "grep", "write_file", "edit_file", "run_command"}},
-		{ModeFull, []string{"read_file", "list_dir", "grep", "write_file", "edit_file", "run_command"}},
+		{"", []string{"read_file", "list_dir", "grep", "write_file", "edit_file", "run_command", "delegate_subagent"}},
+		{ModeFull, []string{"read_file", "list_dir", "grep", "write_file", "edit_file", "run_command", "delegate_subagent"}},
 		{ModeReadonly, []string{"read_file", "list_dir", "grep"}},
-		{ModeSafe, []string{"read_file", "list_dir", "grep", "write_file", "edit_file"}},
+		{ModeSafe, []string{"read_file", "list_dir", "grep", "write_file", "edit_file", "delegate_subagent"}},
 	} {
 		t.Run(string(test.mode), func(t *testing.T) {
 			first, err := buildTools(test.mode)

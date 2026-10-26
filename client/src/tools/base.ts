@@ -45,6 +45,7 @@ export function boundedOutput(text: string): string {
 export class HandlerContext {
     workspace: string;
     signal?: AbortSignal;
+    delegate?: (args: ToolArgs) => Promise<string>;
 
     constructor(workspace: string) {
         this.workspace = fs.realpathSync(workspace);

@@ -11,7 +11,7 @@ import (
 
 // Resources are embedded so the backend remains a self-contained binary.
 //
-//go:embed prompts/system_openai.txt prompts/system_claude.txt prompts/permissions.txt
+//go:embed prompts/system_openai.txt prompts/system_claude.txt prompts/permissions.txt prompts/subagent_explore.txt
 var promptsFS embed.FS
 
 //go:embed tools/*.json
@@ -68,6 +68,9 @@ func promptParts(mode Mode, route ModelRoute) (string, []json.RawMessage, error)
 		return "", nil, completionFailure(codeConfig, false, "cannot build tool catalog: "+err.Error(), err)
 	}
 	prompt, err := promptsFS.ReadFile("prompts/system_" + route.Family + ".txt")
+	if route.agentType != "" {
+		prompt, err = promptsFS.ReadFile("prompts/subagent_" + route.agentType + ".txt")
+	}
 	if err != nil {
 		return "", nil, completionFailure(codeConfig, false, "unsupported prompt family", nil)
 	}

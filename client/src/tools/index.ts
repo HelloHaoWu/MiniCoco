@@ -5,6 +5,7 @@ import {EditFile} from './editFile.ts';
 import {ListDir} from './listDir.ts';
 import {Grep} from './grep.ts';
 import {RunCommand} from './runCommand.ts';
+import {DelegateSubagent} from './delegateSubagent.ts';
 
 // Tool dispatch registry.
 //
@@ -19,6 +20,7 @@ const REGISTRY: Record<string, HandlerCtor> = {
     write_file: WriteFile,
     edit_file: EditFile,
     run_command: RunCommand,
+    delegate_subagent: DelegateSubagent,
 };
 
 export function createHandler(name: string, ctx: HandlerContext): Handler | null {

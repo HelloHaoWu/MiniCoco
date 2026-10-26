@@ -8,17 +8,19 @@ import (
 
 // The default file stores require a single writer instance per data directory.
 type Session struct {
-	ID               string `json:"id"`
-	User             string `json:"user"`
-	Model            string `json:"model"`
-	Workspace        string `json:"workspace"`
-	CreatedAt        int64  `json:"created_at"` // Unix milliseconds
-	Ended            bool   `json:"ended"`
-	PromptTokens     int64  `json:"prompt_tokens"`
-	CompletionTokens int64  `json:"completion_tokens"`
-	TotalTokens      int64  `json:"total_tokens"`
-	MessageCount     int    `json:"message_count"`
-	LastMessageCount int    `json:"last_message_count"`
+	ParentSessionID  *string `json:"parentSessionId"`
+	AgentType        string  `json:"agentType,omitempty"`
+	ID               string  `json:"id"`
+	User             string  `json:"user"`
+	Model            string  `json:"model"`
+	Workspace        string  `json:"workspace"`
+	CreatedAt        int64   `json:"created_at"` // Unix milliseconds
+	Ended            bool    `json:"ended"`
+	PromptTokens     int64   `json:"prompt_tokens"`
+	CompletionTokens int64   `json:"completion_tokens"`
+	TotalTokens      int64   `json:"total_tokens"`
+	MessageCount     int     `json:"message_count"`
+	LastMessageCount int     `json:"last_message_count"`
 }
 
 type Message map[string]any

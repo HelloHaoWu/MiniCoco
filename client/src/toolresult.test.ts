@@ -21,12 +21,12 @@ async function cli(args: string[]): Promise<{code: number | null; stdout: string
     return {code, stdout, stderr};
 }
 
-async function backend(binary: string, dir: string, model: string, loop = ''): Promise<{url: string; stop: () => Promise<void>}> {
+async function backend(binary: string, dir: string, model: string, loop = '', upstream = ''): Promise<{url: string; stop: () => Promise<void>}> {
     const reservation = http.createServer();reservation.listen(0, '127.0.0.1');await once(reservation, 'listening');
     const port = (reservation.address() as import('node:net').AddressInfo).port;
     await new Promise<void>(resolve => reservation.close(() => resolve()));
     const child = spawn(binary, [], {cwd: dir, env: {...process.env, STORE_BACKEND: 'file', MINICOCO_DATA_DIR: path.join(dir, 'data'),
-        LOOP_IMPL: loop, MINICOCO_MODEL_IS_FUNCTION_CALL: '', MINICOCO_MODELS_FILE: '', LLM_MODEL: model, MINICOCO_DEBUG_PROMPT: '0', LLM_PROVIDER: 'mock', LLM_API_KEY: '', LLM_MOCK_MODE: 'normal',
+        LOOP_IMPL: loop, MINICOCO_MODEL_IS_FUNCTION_CALL: '', MINICOCO_MODELS_FILE: '', LLM_MODEL: model, MINICOCO_DEBUG_PROMPT: '0', LLM_PROVIDER: upstream ? 'openai' : 'mock', LLM_BASE_URL: upstream, LLM_API_KEY: upstream ? 'fake-test-key' : '', LLM_MOCK_MODE: 'normal',
         MINICOCO_HOST: '127.0.0.1', MINICOCO_PORT: String(port)}, stdio: 'ignore'});
     const exited = once(child, 'exit');
     const stop = async (): Promise<void> => {if (child.exitCode === null) child.kill('SIGTERM');await exited;};
@@ -128,4 +128,39 @@ test('v2 compresses long CLI sessions and resumes checkpoints after backend rest
             assert.equal((await (await fetch(running.url + '/health')).json() as {loop_impl: string}).loop_impl, 'v2');
         } finally {await running.stop();}
     } finally {fs.rmSync(temp, {recursive: true, force: true});}
+});
+
+test('subagent has a persisted readonly child session and returns one final result to parent', {timeout:30_000}, async()=>{
+    const temp=fs.mkdtempSync(path.join(os.tmpdir(),'minicoco-subagent-'));
+    const received: {child:boolean;messages:{role:string;content?:string;tool_calls?:{function:{name:string}}[]}[]}[]=[];
+    const upstream=http.createServer(async(req,res)=>{
+        let raw='';for await(const chunk of req)raw+=chunk;const input=JSON.parse(raw);
+        const child=String(input.messages[0].content).startsWith('You are a read-only exploration subagent.');
+        received.push({child,messages:input.messages});
+        if(child)assert.deepEqual(input.tools.map((tool: {function:{name:string}})=>tool.function.name),['read_file','list_dir','grep']);
+        const last=input.messages.at(-1);let delta:unknown,finish='tool_calls';
+        const exhaust = child && input.messages.some((m: {content?:string}) => m.content === 'loop');
+        if(last.role==='tool' && !exhaust){delta={content:child?'findings: main.go:1':'parent finished: '+last.content};finish='stop';}
+        else {const name=child?'list_dir':'delegate_subagent';const args=child?{}:{description:'find Go files',agent_type:'explore',query:String(last.content).includes('exhaust')?'loop':'list Go files'};delta={tool_calls:[{index:0,id:child?'child-list':'parent-delegate',function:{name,arguments:JSON.stringify(args)}}]};}
+        res.setHeader('Content-Type','text/event-stream');res.end('data: '+JSON.stringify({choices:[{delta,finish_reason:finish}],usage:{prompt_tokens:1,completion_tokens:1,total_tokens:2}})+'\n\ndata: [DONE]\n\n');
+    });
+    upstream.listen(0,'127.0.0.1');await once(upstream,'listening');
+    try{
+        const binary=path.join(temp,'backend');const build=spawnSync('go',['build','-o',binary,'.'],{cwd:path.join(project,'backend'),encoding:'utf8'});assert.equal(build.status,0,build.stderr);
+        const ws=path.join(temp,'workspace');fs.mkdirSync(ws);fs.writeFileSync(path.join(ws,'main.go'),'package main\n');
+        const url=`http://127.0.0.1:${(upstream.address() as {port:number}).port}`;
+        let running=await backend(binary,temp,'deepseek-flash','',url);
+        try{
+            const result=await cli(['delegate','--server',running.url,'--workspace',ws]);assert.equal(result.code,0,result.stderr);assert.match(result.stdout,/parent finished: findings: main.go:1/);
+            const sessions=await listSessions(running.url);assert.equal(sessions.length,2);
+            const child=sessions.find(s=>s.agentType==='explore')!;const parent=sessions.find(s=>!s.agentType)!;
+            assert.equal(child.parentSessionId,parent.id);assert.equal(child.message_count,4);assert.equal(parent.message_count,4);
+            const parentPrompt=received.filter(r=>!r.child).at(-1)!.messages;
+            assert.equal(parentPrompt.filter(m=>m.role==='tool').length,1);assert(!JSON.stringify(parentPrompt).includes('child-list'));
+            await running.stop();running=await backend(binary,temp,'deepseek-flash','',url);
+            assert.equal((await getSession(running.url,child.id)).session.parentSessionId,parent.id);
+            const exhausted = await cli(['exhaust delegate','--server',running.url,'--workspace',ws]);assert.equal(exhausted.code,0,exhausted.stderr);assert.match(exhausted.stdout,/子任务未完成（exhausted）/);
+            const exhaustedChild = (await listSessions(running.url)).find(s=>s.agentType==='explore' && s.id!==child.id)!;assert.equal(exhaustedChild.message_count,20);assert.equal((await getSession(running.url,exhaustedChild.id)).canResume,false);
+        }finally{await running.stop();}
+    }finally{upstream.closeAllConnections();await new Promise<void>(resolve=>upstream.close(()=>resolve()));fs.rmSync(temp,{recursive:true,force:true});}
 });

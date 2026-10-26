@@ -33,13 +33,15 @@ type Event struct {
 // ChatRequest carries only the input for a single durable round. A round ID is
 // stable across retries; a fresh client must use fresh IDs even when resuming.
 type ChatRequest struct {
-	SessionID      string          `json:"sessionId"`
-	RoundID        string          `json:"roundId"`
-	Query          *string         `json:"query,omitempty"`
-	ToolUseResults []ToolUseResult `json:"toolUseResults,omitempty"`
-	Workspace      string          `json:"workspace"`
-	Model          string          `json:"model"`
-	Mode           Mode            `json:"mode,omitempty"` // Absent/empty means full.
+	ParentSessionID string          `json:"parentSessionId,omitempty"`
+	AgentType       string          `json:"agentType,omitempty"`
+	SessionID       string          `json:"sessionId"`
+	RoundID         string          `json:"roundId"`
+	Query           *string         `json:"query,omitempty"`
+	ToolUseResults  []ToolUseResult `json:"toolUseResults,omitempty"`
+	Workspace       string          `json:"workspace"`
+	Model           string          `json:"model"`
+	Mode            Mode            `json:"mode,omitempty"` // Absent/empty means full.
 	// Absent/null retains the original streaming transport; false buffers events.
 	Stream *bool `json:"stream,omitempty"`
 }

@@ -11,17 +11,18 @@ import (
 type ToolName string
 
 const (
-	ReadFile   ToolName = "read_file"
-	ListDir    ToolName = "list_dir"
-	Grep       ToolName = "grep"
-	WriteFile  ToolName = "write_file"
-	EditFile   ToolName = "edit_file"
-	RunCommand ToolName = "run_command"
+	ReadFile         ToolName = "read_file"
+	ListDir          ToolName = "list_dir"
+	Grep             ToolName = "grep"
+	WriteFile        ToolName = "write_file"
+	EditFile         ToolName = "edit_file"
+	RunCommand       ToolName = "run_command"
+	DelegateSubagent ToolName = "delegate_subagent"
 )
 
 // Explicit declaration order, independent of directory or map iteration order.
-var toolOrder = [...]ToolName{ReadFile, ListDir, Grep, WriteFile, EditFile, RunCommand}
-var writesOrExecutes = map[ToolName]bool{WriteFile: true, EditFile: true, RunCommand: true}
+var toolOrder = [...]ToolName{ReadFile, ListDir, Grep, WriteFile, EditFile, RunCommand, DelegateSubagent}
+var writesOrExecutes = map[ToolName]bool{WriteFile: true, EditFile: true, RunCommand: true, DelegateSubagent: true}
 
 // availableVersion is the minimum harness version, not the schema file version.
 // The current harness advertises v1; client-controlled version selection is reserved.
@@ -134,6 +135,12 @@ func buildTools(mode Mode) ([]json.RawMessage, error) {
 			return nil, fmt.Errorf("no compatible schema for tool %s", name)
 		}
 		if toolAllowed(mode, name) {
+			if name == DelegateSubagent {
+				schema, err = injectSubagents(schema)
+				if err != nil {
+					return nil, err
+				}
+			}
 			out = append(out, schema)
 		}
 	}

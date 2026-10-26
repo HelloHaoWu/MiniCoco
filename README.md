@@ -445,3 +445,9 @@ LOOP_IMPL=v2 LLM_PROVIDER=mock bash run_backend.sh
 macOS/Linux 的 run_command 默认合并输出限额 1 MiB、进程组 RSS 采样阈值 1.5 GiB、超时 120s。可在启动客户端时设置 `RUN_OUTPUT_CAP` / `RSS_CAP`（字节）及 `RUN_TIMEOUT_MS`（毫秒）。超限/取消终止进程组；Windows 当前明确拒绝 guarded command。
 
 刷屏命令被终止后，已捕获前缀写入工作区 `data/terminals/<uuid>.out`，结果仅带尾部预览和截断说明；超出限额的输出没有保存。工具协议仍限制 64 KiB 回传。RSS 每 100ms 采样，不是内核硬限制，不能防止恶意进程自行脱离进程组；命令仍不是 OS 沙箱。
+
+### 子 Agent
+
+full/safe 模式下模型可调用 `delegate_subagent`，目前类型为 `explore`。子会话单独持久化 parentSessionId，仅能 read_file/list_dir/grep，独立最多 10 轮；只将最后报告回父，子中间工具记录留在子会话。后端和客户端都限制子会话为 readonly，拒绝继续派生；多个委派当前顺序执行。
+
+explore 默认使用 deepseek-flash 路由；显式 mock 模型继续离线，`LLM_PROVIDER=mock` 也覆盖子调用。子模型失败/预算耗尽回错误文本，父可继续处理；无跨进程子任务恢复调度或副作用回滚。

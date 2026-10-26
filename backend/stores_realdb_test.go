@@ -622,3 +622,5 @@ func TestRealLoopDispatchAndCommittedReplay(t *testing.T) {
 }
 
 func TestRealCompressionPersistence(t *testing.T) { runCompressionPersistence(t, realContractFactory) }
+
+func TestRealSubagentPersistence(t *testing.T) { runSubagentPersistence(t, realContractFactory) }

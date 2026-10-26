@@ -52,6 +52,7 @@ async function main(): Promise<void> {
         if (args.workspaceGiven && realpathSync(path.resolve(args.workspace)) !== session.workspace) throw new Error('--workspace differs from the saved session workspace');
         args.workspace = session.workspace;
         if (!args.model) args.model = session.model;
+        if (session.agentType === 'explore') args.mode = 'readonly';
     }
     const terminal = !!process.stdin.isTTY && !!process.stdout.isTTY;
     let rl: readline.Interface | undefined;

@@ -26,6 +26,9 @@ export async function readJSON(server: string, suffix: string, signal?: AbortSig
 function isSession(value: unknown): value is Session {
     if (!value || typeof value !== 'object') return false;
     const session = value as Session;
+    if (session.agentType !== undefined && session.agentType !== 'explore') return false;
+    if (session.parentSessionId !== undefined && session.parentSessionId !== null && (typeof session.parentSessionId !== 'string' || !/^[A-Za-z0-9_-]{1,128}$/.test(session.parentSessionId))) return false;
+    if (session.agentType && !session.parentSessionId) return false;
     return typeof session.id === 'string' && /^[A-Za-z0-9_-]{1,128}$/.test(session.id) && typeof session.workspace === 'string' && typeof session.model === 'string' &&
         typeof session.user === 'string' && typeof session.ended === 'boolean' &&
         [session.created_at, session.message_count, session.last_message_count, session.prompt_tokens, session.completion_tokens, session.total_tokens].every(n => Number.isInteger(n) && n >= 0);

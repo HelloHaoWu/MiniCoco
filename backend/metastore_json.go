@@ -72,7 +72,10 @@ func NewJSONMetaStore(dataDir string) (*JSONMetaStore, error) {
 }
 
 func validSession(s Session) bool {
-	return validSessionID(s.ID) && s.CreatedAt >= 0 && s.MessageCount >= 0 && s.LastMessageCount >= 0 && validUsage(Usage{s.PromptTokens, s.CompletionTokens, s.TotalTokens})
+	if (s.AgentType == "") != (s.ParentSessionID == nil) {
+		return false
+	}
+	return (s.ParentSessionID == nil || validSessionID(*s.ParentSessionID)) && (s.AgentType == "" || s.AgentType == "explore") && validSessionID(s.ID) && s.CreatedAt >= 0 && s.MessageCount >= 0 && s.LastMessageCount >= 0 && validUsage(Usage{s.PromptTokens, s.CompletionTokens, s.TotalTokens})
 }
 
 // Copy before persisting: a failed write must not publish an in-memory update.
@@ -84,7 +87,7 @@ func (store *JSONMetaStore) mutate(ctx context.Context, change func(*metaSnapsho
 	}
 	next := metaSnapshot{Sessions: make(map[string]Session, len(store.state.Sessions)), Likes: make(map[string]int, len(store.state.Likes)), RoundUsage: map[string]map[string]Usage{}}
 	for id, session := range store.state.Sessions {
-		next.Sessions[id] = session
+		next.Sessions[id] = cloneSession(session)
 	}
 	for id, like := range store.state.Likes {
 		next.Likes[id] = like
@@ -160,7 +163,7 @@ func (store *JSONMetaStore) CreateSession(ctx context.Context, session Session) 
 		if _, exists := next.Sessions[session.ID]; exists {
 			return ErrStoreConflict
 		}
-		next.Sessions[session.ID] = session
+		next.Sessions[session.ID] = cloneSession(session)
 		return nil
 	})
 	if err != nil {
@@ -179,7 +182,7 @@ func (store *JSONMetaStore) GetSession(ctx context.Context, id string) (Session,
 	if !exists {
 		return Session{}, ErrStoreNotFound
 	}
-	return session, nil
+	return cloneSession(session), nil
 }
 
 func (store *JSONMetaStore) BumpUsage(ctx context.Context, id string, usage Usage) error {
@@ -233,7 +236,7 @@ func (store *JSONMetaStore) ListSessions(ctx context.Context, user string) ([]Se
 	result := []Session{}
 	for _, session := range store.state.Sessions {
 		if session.User == user {
-			result = append(result, session)
+			result = append(result, cloneSession(session))
 		}
 	}
 	sort.Slice(result, func(i, j int) bool {
@@ -243,4 +246,12 @@ func (store *JSONMetaStore) ListSessions(ctx context.Context, user string) ([]Se
 		return result[i].CreatedAt > result[j].CreatedAt
 	})
 	return result, nil
+}
+
+func cloneSession(s Session) Session {
+	if s.ParentSessionID != nil {
+		parent := *s.ParentSessionID
+		s.ParentSessionID = &parent
+	}
+	return s
 }

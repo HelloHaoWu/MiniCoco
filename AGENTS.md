@@ -11,7 +11,7 @@
 - 工具增加/升级需使用 name__vN.json 与 availableVersion，更新后端注册顺序、模式策略及客户端 Handler/策略。模式必须贯穿请求、重试和执行；完整批次检查在任何本地副作用之前完成。同轮不得变更模式，默认 full 保留旧轮次指纹。模式不是鉴权或 OS 沙箱。
 - 工具结果先校验完整身份再按请求顺序格式化并落库。Native 保留旧字段/错误前缀；XML 必须转义文本并限制标签名称，按转义后的 Go JSON 最坏体积预留预算。已持久化结果的会话不得混用格式；默认 Native 指纹保持兼容。完整 prompt 调试默认关闭，仅在显式开关下输出本地 stderr，日志不得提交。
 - 模型路由集中在 models.json / models.go，提示词、formatter 与传输共用单轮快照。修改路由须同步模型能力/提示词测试和配置迁移说明；maxTokens 用于 v2 上下文估算预算，不得误用作输出 max_tokens。未知模型在创建会话前拒绝，成功轮回放不调用供应商。模型规格须查官方资料，项目配置与实际供应商能力分开描述。
-- 新单轮实现须通过 registerLoop 注册，保留 context 取消、固定 roundId 幂等、完整批次持久化后再暴露及统一失败结束边界；SSE/JSON 共用分流。空/未知 LOOP_IMPL 回退 v1，未实现的压缩能力不得宣称可用。相同 family/mode/Schema 的 system/tools 须与工作区和历史无关，追加消息不改已有前缀；诊断 hash/模拟缓存不能当作真实命中或收益证据。
+- 新单轮实现须通过 registerLoop 注册，保留 context 取消、固定 roundId 幂等、完整批次持久化后再暴露及统一失败结束边界；SSE/JSON 共用分流。空/未知 LOOP_IMPL 回退 v1，未实现的压缩能力不得宣称可用。相同 family/mode/agentType/Schema 的 system/tools 须与工作区和历史无关，追加消息不改已有前缀；诊断 hash/模拟缓存不能当作真实命中或收益证据。
 - 压缩只能改变模型视图，RawLatest 保留原始幂等、工具身份和计数；保存摘要必须校验完整批次边界及源指纹，独立去重摘要 usage 并支持回写恢复，不能用 Latest 的压缩长度更新原始账本。
 - 每个 Part 达到对应行为验收要求后才标记完成；执行统一检查，区分历史验证与本次新运行结果。真实库验收使用 check_realdb.sh 并显式指定测试服务；缺少服务的 skip 不算验收通过。
 - 在本工作区，每完成一个 Part 并通过验收，检查更新两层 AGENTS、完成上层 ChangeLog 及索引后，自动提交该 Part 的相关代码和仓库内文档并推送 GitHub 一次，用户已授权，无需逐次询问。提交前检查 diff/暂存范围，只提交相关改动，核实目标分支，不强推、不自动合并 PR。如实记录提交号及推送结果。
@@ -19,8 +19,8 @@
 
 ## 目录与当前架构
 
-- backend/：Go 持久化单轮请求服务。main.go 接收 HTTP 请求，agentloop.go 编排单轮，llm.go 调用模型；errors.go 分类失败，mock.go 提供确定性故障预算，transport.go 收集有界 JSON 事件。prompts/ 和 tools/ 编译嵌入提示词及六个工具 Schema。
-- backend/tools.go：ToolName 注册、固定 read/list/grep/write/edit/run_command 顺序、兼容最高 Schema 版本与模式过滤；tools/*__vN.json 含最低 Harness 版本 availableVersion，当前内部版本 1，元数据不发给供应商。prompt.go 使用请求模式构建清单，启动时检查全部资源。
+- backend/：Go 持久化单轮请求服务。main.go 接收 HTTP 请求，agentloop.go 编排单轮，llm.go 调用模型；errors.go 分类失败，mock.go 提供确定性故障预算，transport.go 收集有界 JSON 事件。prompts/ 和 tools/ 编译嵌入提示词及七个工具 Schema。
+- backend/tools.go：ToolName 注册、固定 read/list/grep/write/edit/run_command/delegate_subagent 顺序、兼容最高 Schema 版本与模式过滤；tools/*__vN.json 含最低 Harness 版本 availableVersion，当前内部版本 1，元数据不发给供应商。prompt.go 使用请求模式构建清单，启动时检查全部资源。
 - backend/loop_registry.go：LoopImpl、registerLoop、并发安全选择、LOOP_IMPL 与未知回退；v1 委托现有持久化服务。agentloop.go 的共享入口贯通 SSE/JSON；main.go 启动日志和 health.loop_impl 显示实际选择。loop_registry_test.go 验证分流/取消/回放/配置，prompt_cache_test.go 验证静态 hash、上游字节、历史追加和模拟缓存用量。
 - backend/context_budget.go / compression.go / context_history*.go：v2 估算预算、micro/full 摘要、主动/反应式压缩、进度限制、锁/限流与摘要视图；RawLatest 保留原始幂等/恢复依据，Latest 合并校验后的摘要；源指纹与独立用量账本保证重开和回写恢复。
 - backend/models.go / models.json：内嵌路由表、完整外部替代表、严格配置校验与单轮快照；llm.go 使用路由 provider/baseURL/temperature/thinking。prompts/system_openai.txt 与 system_claude.txt 按 family 选择；工作区仅注入首条 user 环境消息，不写 transcript。
@@ -35,7 +35,7 @@
 
 客户端提交 sessionId + 固定 roundId + query 或 toolUseResults 增量，完整历史与预算在后端；旧 messages 请求拒绝。首轮由固定 roundId 派生会话，响应头丢失也不重复创建；输入和 pending 原子预占，失败输入不进入 Latest，成功轮保存事件后直接回放。同会话并发返回 425。工作区绑定会话，恢复时使用保存的规范路径。
 
-mode 可选，省略/空串等价 full（六个工具）；readonly 仅 read_file/list_dir/grep，safe 仅禁用 run_command、仍可写文件。CLI --mode 在本次调用每轮及重试/JSON 兜底保持固定，--resume 不继承上次模式，需显式重新指定。模式不作为会话权限保存。后端整批检查后才提交/暴露工具，客户端消费者和本地执行再次检查，未知工具拒绝；同 roundId 不能换模式。只有 full 在指纹中省略 Mode 字段，以兼容 Phase 2 已存储轮次。
+mode 可选，省略/空串等价 full（七个工具）；readonly 仅 read_file/list_dir/grep，safe 仅禁用 run_command、仍可写文件。CLI --mode 在本次调用每轮及重试/JSON 兜底保持固定，--resume 不继承上次模式，需显式重新指定。模式不作为会话权限保存。后端整批检查后才提交/暴露工具，客户端消费者和本地执行再次检查，未知工具拒绝；同 roundId 不能换模式。只有 full 在指纹中省略 Mode 字段，以兼容 Phase 2 已存储轮次。
 
 工具输出按 Go JSON 转义限制为 64 KiB（含 HTML/Unicode 分隔符）；预留结果预算、提交 final 和元数据后才发送完整可执行工具批次/成功 done。CommitRoundUsage 按轮去重聚合，不能再对同轮额外 BumpUsage；transcript final 修复中断的元数据回写。缺失供应商 usage 时记 0，mock 每轮 1/1/2 是合成计数；成功用量不等于供应商全部计费。
 
@@ -45,7 +45,7 @@ mode 可选，省略/空串等价 full（六个工具）；readonly 仅 read_fil
 
 此处仍只实现结果呈现，未实现 XML 工具调用生成/解析。MINICOCO_DEBUG_PROMPT=1 显式输出完整 messages，可能含私密代码/用户文本，默认关闭。system/tools 在相同 family/mode 下与 workspace 无关，环境消息在 system 之后、历史之前；不表示已验证供应商缓存命中。会话元数据保存首轮模型，显式 --model 只覆盖本次调用，恢复覆盖需再次传入。
 
-LOOP_IMPL 默认/空为 v1，未注册键回退 v1；环境和 .env 支持，环境优先。生产已注册 v1/v2，v2 已实现预算、摘要和压缩重试；测试假实现为 test-v2；无用户分桶或 HTTP 注册接口。注册拒绝空/重复/空实现，读写锁保护；分流键不改变协议或旧轮次指纹，pending 重试保持实现/路由配置稳定，不表示自动数据迁移。缓存诊断 hash=SHA256(system_text+tools_json)，非完整 HTTP 请求或供应商 cache key。相同 family/mode/Schema 下，工具 JSON 字节、工作区隔离和历史前缀追加已验收；改 family/mode/Schema 可使 hash 改变。cacheHandle、命中指标持久化和真实命中率/延迟/费用尚未实现或验证。
+LOOP_IMPL 默认/空为 v1，未注册键回退 v1；环境和 .env 支持，环境优先。生产已注册 v1/v2，v2 已实现预算、摘要和压缩重试；测试假实现为 test-v2；无用户分桶或 HTTP 注册接口。注册拒绝空/重复/空实现，读写锁保护；分流键不改变协议或旧轮次指纹，pending 重试保持实现/路由配置稳定，不表示自动数据迁移。缓存诊断 hash=SHA256(system_text+tools_json)，非完整 HTTP 请求或供应商 cache key。相同 family/mode/agentType/Schema 下，工具 JSON 字节、工作区隔离和历史前缀追加已验收；改 family/mode/Schema 可使 hash 改变。cacheHandle、命中指标持久化和真实命中率/延迟/费用尚未实现或验证。
 
 默认文件档 data/ 相对后端 cwd（启动脚本为 backend/data/），MINICOCO_DATA_DIR 可设绝对路径，每目录仅一个写入实例。JSONL 整文件原子替换，协调器只在进程内生效。部署须持久化数据目录。
 
@@ -116,10 +116,18 @@ check.sh 和 check_realdb.sh 均通过：默认零依赖、Go -race/vet/构建�
 
 审批不是 OS 沙箱；直接调用底层 Handler 的程序需自行提供审批入口。审计是本地客户端报告、best effort，不能作为安全证明或工具去重日志。--yes 表示本次调用显式批准危险工具。下一步 Part 2 进程资源保护和权限提示词；Phase 8—9 未实施。Phase 6 Part 2 已推送 f3feace，本 Part 发布见 ChangeLog 008。
 
-## 最新进度：Phase 7 完成（2026-10-26）
+## Phase 7 历史验收（2026-10-26）
 
 Phase 7 Part 2：run_command 在 macOS/Linux 下监测整个普通子进程组的 RSS（100ms 采样），默认 1.5 GiB、120s 墙钟超时和 1 MiB 合并输出限额。超限/取消先 SIGTERM，再 SIGKILL 清理；输出超限保存 workspace/data/terminals/<uuid>.out 的有界已捕获前缀，返回尾部 2 KiB 和明确截断说明。RUN_OUTPUT_CAP / RSS_CAP / RUN_TIMEOUT_MS 从客户端环境读取并严格校验。permissions.txt 按阶段原文追加到模型族 system，静态前缀和预算均包含此段。
 
 本次 check.sh 与 check_realdb.sh 均通过：默认零依赖、Go -race/vet/构建、TS 类型检查、10 工具自测和 60 客户端测试（8 文件）；默认覆盖率 83.3%，真实档 82.2%。实测 5 MiB 输出限制为 1 MiB 日志、RSS 杀死分配内存的后代且 PID 消失、墙钟超时/取消无后续标记文件、配置非法不执行命令；权限原文和固定预算纳入测试。
 
 RSS 是采样保护，不是内核硬限制；自行脱离进程组的恶意命令、OS 沙箱和 Windows 命令保护未实现，Windows 明确拒绝 guarded command。日志只保存已捕获限额内输出，后续输出未保存；工具回传仍受 64 KiB JSON 预算。权限提示词为软约束，强制工具审批仍执行。真实模型是否主动声明意图尚未实测。Part 1 已推送 29cf85a，Part 2 发布见 ChangeLog 009；下一步 Phase 8 Part 1，Phase 8—9 尚未实施。
+
+## 最新进度：Phase 8 Part 1（2026-10-26）
+
+Phase 8 Part 1：delegate_subagent__v1 工具及 explore 注册表，后端注入 enum/说明并使用阶段原文子 Agent system；客户端递归 Conversation，新 session、readonly、独立 10 轮预算，默认快模型 deepseek-flash（显式 mock 模型保持 mock），只回最终文本，未完成作为工具错误。Go 强制子会话只读，拒绝第三层派生和不同工作区；ParentSessionID/AgentType 在 JSON 和 SQLite 持久化。SQLite 新增独立 session_link 表，兼容旧 session 表，不迁移正文。CLI 恢复子会话同样锁定 readonly。
+
+本次 check.sh 与 check_realdb.sh 通过：默认零依赖、Go -race/vet/构建、TS 类型检查、10 工具自测、61 客户端测试（8 文件）；默认覆盖率 83.5%，真实档 82.3%。最后的恢复权限收紧又通过类型检查与 sessions/toolresult 9 项回归。真实 Go+CLI+本机模拟上游验证父子各两轮、子工具仅 read/list/grep、父仅收到一条报告、重开父子关系保持，以及子预算耗尽不执行最后批次；file/real 共用关系持久化和父历史隔离测试。
+
+full 七个工具，safe 排除 run_command、允许只读委派；readonly 仍只有 read/list/grep，子 Agent 不能继续委派。多个委派当前顺序执行，未实现并发子 Agent 调度。子中间步骤仅写子 transcript，不进入父历史；子失败/取消无副作用回滚。新增 run_command__v2 仅修正 Phase 7 后资源说明，参数兼容；后台任务尚未实现。无真实模型 API。Phase 7 Part 2 已推送 fd9cf37，本 Part 发布见 ChangeLog 010，下一步 Phase 8 Part 2；Phase 9 未实施。

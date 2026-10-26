@@ -20,6 +20,7 @@ type SQLiteMetaStore struct{ db *sql.DB }
 var _ MetaStore = (*SQLiteMetaStore)(nil)
 
 const sessionColumns = `id,user,model,workspace,created_at,ended,prompt_tokens,completion_tokens,total_tokens,message_count,last_message_count`
+const sessionLinkColumns = `,(SELECT parent_session_id FROM session_link WHERE session_id=session.id),COALESCE((SELECT agent_type FROM session_link WHERE session_id=session.id),'')`
 
 func NewSQLiteMetaStore(ctx context.Context, path string) (*SQLiteMetaStore, error) {
 	if path == "" {
@@ -62,7 +63,8 @@ func NewSQLiteMetaStore(ctx context.Context, path string) (*SQLiteMetaStore, err
     CREATE TABLE IF NOT EXISTS usage_round(
         session_id TEXT NOT NULL REFERENCES session(id),round_id TEXT NOT NULL,
         prompt INTEGER NOT NULL,completion INTEGER NOT NULL,total INTEGER NOT NULL,
-        PRIMARY KEY(session_id,round_id));`
+        PRIMARY KEY(session_id,round_id));
+    CREATE TABLE IF NOT EXISTS session_link(session_id TEXT PRIMARY KEY REFERENCES session(id),parent_session_id TEXT,agent_type TEXT NOT NULL DEFAULT '');`
 	if _, err := db.ExecContext(ctx, schema); err != nil {
 		db.Close()
 		return nil, err
@@ -80,7 +82,7 @@ func sqliteUnique(err error) bool {
 func scanSQLiteSession(row interface{ Scan(...any) error }) (Session, error) {
 	var session Session
 	err := row.Scan(&session.ID, &session.User, &session.Model, &session.Workspace, &session.CreatedAt, &session.Ended,
-		&session.PromptTokens, &session.CompletionTokens, &session.TotalTokens, &session.MessageCount, &session.LastMessageCount)
+		&session.PromptTokens, &session.CompletionTokens, &session.TotalTokens, &session.MessageCount, &session.LastMessageCount, &session.ParentSessionID, &session.AgentType)
 	if errors.Is(err, sql.ErrNoRows) {
 		return Session{}, ErrStoreNotFound
 	}
@@ -104,7 +106,12 @@ func (store *SQLiteMetaStore) CreateSession(ctx context.Context, session Session
 	if !validSession(session) {
 		return "", ErrStoreInvalid
 	}
-	_, err := store.db.ExecContext(ctx, `INSERT INTO session(`+sessionColumns+`) VALUES(?,?,?,?,?,?,?,?,?,?,?)`,
+	tx, err := store.db.BeginTx(ctx, nil)
+	if err != nil {
+		return "", err
+	}
+	defer tx.Rollback()
+	_, err = tx.ExecContext(ctx, `INSERT INTO session(`+sessionColumns+`) VALUES(?,?,?,?,?,?,?,?,?,?,?)`,
 		session.ID, session.User, session.Model, session.Workspace, session.CreatedAt, session.Ended,
 		session.PromptTokens, session.CompletionTokens, session.TotalTokens, session.MessageCount, session.LastMessageCount)
 	if sqliteUnique(err) {
@@ -113,11 +120,17 @@ func (store *SQLiteMetaStore) CreateSession(ctx context.Context, session Session
 	if err != nil {
 		return "", err
 	}
+	if _, err := tx.ExecContext(ctx, `INSERT INTO session_link(session_id,parent_session_id,agent_type) VALUES(?,?,?)`, session.ID, session.ParentSessionID, session.AgentType); err != nil {
+		return "", err
+	}
+	if err := tx.Commit(); err != nil {
+		return "", err
+	}
 	return session.ID, nil
 }
 
 func (store *SQLiteMetaStore) GetSession(ctx context.Context, id string) (Session, error) {
-	return scanSQLiteSession(store.db.QueryRowContext(ctx, `SELECT `+sessionColumns+` FROM session WHERE id=?`, id))
+	return scanSQLiteSession(store.db.QueryRowContext(ctx, `SELECT `+sessionColumns+sessionLinkColumns+` FROM session WHERE id=?`, id))
 }
 
 func (store *SQLiteMetaStore) BumpUsage(ctx context.Context, id string, usage Usage) error {
@@ -171,7 +184,7 @@ func (store *SQLiteMetaStore) SetLike(ctx context.Context, msgID string, like in
 }
 
 func (store *SQLiteMetaStore) ListSessions(ctx context.Context, user string) ([]Session, error) {
-	rows, err := store.db.QueryContext(ctx, `SELECT `+sessionColumns+` FROM session WHERE user=? ORDER BY created_at DESC,id ASC`, user)
+	rows, err := store.db.QueryContext(ctx, `SELECT `+sessionColumns+sessionLinkColumns+` FROM session WHERE user=? ORDER BY created_at DESC,id ASC`, user)
 	if err != nil {
 		return nil, err
 	}

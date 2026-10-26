@@ -1,3 +1,4 @@
+import {SUBAGENTS, SUB_MAX_ROUNDS} from './agents.ts';
 import {randomUUID, createHash} from 'node:crypto';
 import {approve, type ApprovalMode, type ApprovalPrompt} from './approval.ts';
 import {AuditClient} from './audit.ts';
@@ -17,7 +18,7 @@ export interface RunResult {
     sessionId?: string;
     message?: string;
 }
-export interface ConversationOptions { mode?: ToolMode; sessionId?: string; onSession?: (id: string) => void; retryPolicy?: RetryPolicy; retryDependencies?: RetryDependencies; approvalMode?: ApprovalMode; approvalPrompt?: ApprovalPrompt; }
+export interface ConversationOptions { mode?: ToolMode; sessionId?: string; onSession?: (id: string) => void; retryPolicy?: RetryPolicy; retryDependencies?: RetryDependencies; approvalMode?: ApprovalMode; approvalPrompt?: ApprovalPrompt; agentType?: string; parentSessionId?: string; quiet?: boolean; }
 
 // Only session identity and an unacknowledged delta are kept here. The server
 // owns full history, budgets, input reservations and successful-round commits.
@@ -47,12 +48,20 @@ export class Conversation {
         this.model = model;
         this.maxRounds = maxRounds;
         this.options = options;
-        this.mode = normalizeMode(options.mode);
+        this.mode = options.agentType ? 'readonly' : normalizeMode(options.mode);
         this.sessionId = options.sessionId ?? '';
+        this.ctx.delegate = async args => {
+            if (this.options.agentType || !this.sessionId) throw new ToolError('subagent depth/session denied');
+            if (args.agent_type !== 'explore') throw new ToolError('unknown agent_type');
+            const spec = SUBAGENTS.explore;
+            const sub = new Conversation(this.serverUrl, this.workspace, this.model.startsWith('mock') ? this.model : spec.model, SUB_MAX_ROUNDS, {mode: spec.mode, approvalMode: 'deny', agentType: 'explore', parentSessionId: this.sessionId, quiet: true});
+            try {const result = await sub.run(String(args.query), this.ctx.signal);return result.status === 'completed' ? result.text : 'ERROR: 子任务未完成（' + result.status + '）: ' + (result.message ?? '');}
+            finally {await sub.close();}
+        };
     }
 
     private nextRequest(delta: {query: string} | {toolUseResults: ToolUseResult[]}): RoundRequest {
-        return {sessionId: this.sessionId, roundId: `${this.sessionId || 'new'}-r-${randomUUID()}`, workspace: this.workspace, model: this.model, mode: this.mode, ...delta};
+        return {sessionId: this.sessionId, roundId: `${this.sessionId || 'new'}-r-${randomUUID()}`, workspace: this.workspace, model: this.model, mode: this.mode, agentType: this.options.agentType, parentSessionId: this.options.parentSessionId, ...delta};
     }
 
     async run(query: string, signal?: AbortSignal): Promise<RunResult> {
@@ -68,8 +77,8 @@ export class Conversation {
             this.pending ??= {request: this.nextRequest({query}), query};
             for (rounds = 1; rounds <= this.maxRounds; rounds++) {
                 signal?.throwIfAborted();
-                process.stdout.write(`\n--- round ${rounds} ---\n`);
-                const result = await runRoundWithRetry({...this.pending.request, serverUrl: this.serverUrl, options: {onSession: id => {
+                if (!this.options.quiet) process.stdout.write(`\n--- round ${rounds} ---\n`);
+                const result = await runRoundWithRetry({...this.pending.request, serverUrl: this.serverUrl, options: {onEvent: this.options.quiet ? () => {} : undefined, onSession: id => {
                     if (this.sessionId !== id) {this.sessionId = id;this.options.onSession?.(id);}
                 }}}, this.options.retryPolicy ?? RETRY_POLICY, signal, this.options.retryDependencies);
                 this.sessionId = result.sessionId ?? this.sessionId;
@@ -111,7 +120,7 @@ export class Conversation {
     }
 
     async runTool(call: ToolCall): Promise<string> {
-        process.stdout.write(`→ ${call.name} ${JSON.stringify(call.arguments).slice(0, 120)}\n`);
+        if (!this.options.quiet) process.stdout.write(`→ ${call.name} ${JSON.stringify(call.arguments).slice(0, 120)}\n`);
         let result: string;
         const start = performance.now();
         let approved = false, status: 'ok' | 'error' | 'denied' = 'error';
@@ -129,7 +138,7 @@ export class Conversation {
             this.audit.emit({ts: Date.now(), sessionId: this.sessionId, traceId: this.traceId, tool: call.name, argsDigest: createHash('sha1').update(JSON.stringify(call.arguments)).digest('hex').slice(0, 12), approved, status, ms: Math.max(0, Math.round(performance.now() - start))});
         }
         result = boundedOutput(result);
-        process.stdout.write(result.slice(0, 240) + (result.length > 240 ? '...\n' : '\n'));
+        if (!this.options.quiet) process.stdout.write(result.slice(0, 240) + (result.length > 240 ? '...\n' : '\n'));
         return result;
     }
 

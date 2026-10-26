@@ -41,6 +41,9 @@ func initialSessionID(roundID string) string {
 }
 
 func validateDelta(req ChatRequest) error {
+	if (req.AgentType != "" && req.AgentType != "explore") || (req.AgentType == "") != (req.ParentSessionID == "") || (req.ParentSessionID != "" && !validSessionID(req.ParentSessionID)) {
+		return ErrStoreInvalid
+	}
 	if _, err := normalizeMode(req.Mode); err != nil {
 		return err
 	}
@@ -85,6 +88,18 @@ func (service *sessionService) resolve(ctx context.Context, req *ChatRequest) er
 	}
 	session, err := service.meta.GetSession(ctx, req.SessionID)
 	if errors.Is(err, ErrStoreNotFound) && creating && req.Query != nil {
+		var parent *string
+		if req.AgentType != "" {
+			p, parentErr := service.meta.GetSession(ctx, req.ParentSessionID)
+			if parentErr != nil {
+				return parentErr
+			}
+			if p.ParentSessionID != nil || p.Workspace != req.Workspace {
+				return completionFailure(codeBadRequest, false, "subagent depth/workspace denied", nil)
+			}
+			id := p.ID
+			parent = &id
+		}
 		model := req.Model
 		if model == "" {
 			model = getenv("LLM_MODEL", defaultModel)
@@ -92,7 +107,7 @@ func (service *sessionService) resolve(ctx context.Context, req *ChatRequest) er
 		if _, routeErr := routeFor(model); routeErr != nil {
 			return routeErr
 		}
-		_, err = service.meta.CreateSession(ctx, Session{ID: req.SessionID, Workspace: req.Workspace, Model: model})
+		_, err = service.meta.CreateSession(ctx, Session{ID: req.SessionID, Workspace: req.Workspace, Model: model, ParentSessionID: parent, AgentType: req.AgentType})
 		if err != nil && !errors.Is(err, ErrStoreConflict) {
 			return err
 		}
@@ -103,6 +118,14 @@ func (service *sessionService) resolve(ctx context.Context, req *ChatRequest) er
 	}
 	if session.Workspace != req.Workspace {
 		return fmt.Errorf("%w: session workspace differs", ErrStoreConflict)
+	}
+	if req.AgentType != "" && (req.AgentType != session.AgentType || session.ParentSessionID == nil || *session.ParentSessionID != req.ParentSessionID) {
+		return ErrStoreConflict
+	}
+	if session.AgentType != "" {
+		req.AgentType = session.AgentType
+		req.ParentSessionID = *session.ParentSessionID
+		req.Mode = ModeReadonly
 	}
 	if req.Model == "" {
 		req.Model = session.Model
@@ -184,6 +207,7 @@ func (service *sessionService) process(ctx context.Context, req ChatRequest, emi
 		return err
 	}
 	isFunctionCall := route.IsFunctionCall
+	route.agentType = req.AgentType
 	ctx = context.WithValue(ctx, modelRouteContextKey{}, route)
 	formatIdentity := ""
 	if !isFunctionCall {
@@ -203,7 +227,9 @@ func (service *sessionService) process(ctx context.Context, req ChatRequest, emi
 		Workspace, Model string
 		Mode             Mode   `json:",omitempty"`
 		ToolFormat       string `json:",omitempty"`
-	}{req.Query, req.ToolUseResults, req.Workspace, req.Model, identityMode, formatIdentity})
+		AgentType        string `json:",omitempty"`
+		ParentSessionID  string `json:",omitempty"`
+	}{req.Query, req.ToolUseResults, req.Workspace, req.Model, identityMode, formatIdentity, req.AgentType, req.ParentSessionID})
 	hash := sha256.Sum256(encoded)
 	fingerprint := hex.EncodeToString(hash[:])
 	round, roundErr := service.transcript.Round(ctx, req.SessionID, req.RoundID)

@@ -51,6 +51,8 @@ export interface Message {
 export interface ToolUseResult { id: string; name: string; output: string; isError: boolean; }
 export type ToolMode = 'full' | 'readonly' | 'safe';
 export interface RoundRequest {
+    parentSessionId?: string;
+    agentType?: string;
     sessionId: string;
     roundId: string;
     query?: string;
@@ -60,6 +62,7 @@ export interface RoundRequest {
     mode?: ToolMode;
 }
 export interface Session {
+    parentSessionId?: string | null; agentType?: string;
     id: string; user: string; model: string; workspace: string; created_at: number;
     ended: boolean; prompt_tokens: number; completion_tokens: number; total_tokens: number;
     message_count: number; last_message_count: number;
