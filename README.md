@@ -422,3 +422,14 @@ LOOP_IMPL=v2 LLM_PROVIDER=mock bash run_backend.sh
 ```
 
 无压缩时既有消息前缀只追加；v2 压缩会替换历史旧段，system/tools 静态段保持不变。摘要仅改变模型视图，不会删除原始 JSONL/Mongo 正文。
+
+### 本地追踪（Phase 6）
+
+响应头 `X-Trace-Id` 可定位 `data/logs/trace-<sid>.jsonl`；CLI 失败信息带 trace ID。日志只保存阶段、路由、工具名、错误分类和用量，不保存提示词、参数或输出。
+
+```bash
+./run_client.sh trace <sessionId>
+./run_client.sh trace <sessionId> --round 3
+```
+
+`GET /health` 的 `recentSessions` 包含最近 10 会话的成功轮数、去重账本 token 和日志中的失败尝试数。日志异步且允许丢失，错误数可延迟；SIGINT/SIGTERM 尝试有界 flush，强杀不保证落盘。成功回放不会重复累计 usage。服务端读取单个 trace 文件限制 8 MiB，CLI 响应限制 4 MiB；当前不自动轮转。

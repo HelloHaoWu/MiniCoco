@@ -5,6 +5,7 @@ import {getSession, listSessions} from './sessions.ts';
 import {realpathSync} from 'node:fs';
 import {normalizeMode} from './toolMode.ts';
 import type {ToolMode} from './protocol.ts';
+import {printTrace} from './trace.ts';
 
 interface Args { query: string[]; workspace: string; workspaceGiven: boolean; server: string; model: string; maxRounds: number; resume: string; list: boolean; mode: ToolMode; }
 
@@ -30,6 +31,12 @@ function parseArgs(argv: string[]): Args {
 }
 
 async function main(): Promise<void> {
+    if (process.argv[2] === 'trace') {
+        const argv=process.argv.slice(3), sid=argv.shift() ?? '';
+        let server=process.env.MINICOCO_SERVER || 'http://127.0.0.1:8017', round: number | undefined;
+        while(argv.length) {const flag=argv.shift(), value=argv.shift();if (!value) throw new Error('trace option requires value');if(flag==='--round') round=Number(value);else if(flag==='--server') server=value;else throw new Error('unknown trace option');}
+        await printTrace(server,sid,round);return;
+    }
     const args = parseArgs(process.argv.slice(2));
     if (args.list) {
         if (args.resume || args.query.length) throw new Error('--list cannot be combined with --resume or a query');

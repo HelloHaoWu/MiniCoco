@@ -16,6 +16,8 @@ const maxToolOutputBytes = 64 * 1024
 
 type sessionService struct {
 	trace      func(TraceRecord)
+	traceDir   string
+	sink       *jsonlSink
 	meta       MetaStore
 	transcript TranscriptStore
 	coord      Coordinator

@@ -7,7 +7,12 @@ import (
 	"fmt"
 	"io"
 	"log"
+	"net"
 	"net/http"
+	"os"
+	"os/signal"
+	"path/filepath"
+	"syscall"
 	"time"
 )
 
@@ -45,6 +50,15 @@ func main() {
 		log.Fatal(err)
 	}
 	defer closeStores()
+	activeSessions.traceDir = filepath.Join(getenv("MINICOCO_DATA_DIR", "data"), "logs")
+	sink := newJSONLSink(getenv("MINICOCO_DATA_DIR", "data"), 1024)
+	activeSessions.sink = sink
+	activeSessions.trace = func(r TraceRecord) { sink.emit("logs/trace-"+r.SessionID+".jsonl", r) }
+	defer func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+		defer cancel()
+		_ = sink.close(ctx)
+	}()
 	host := getenv("MINICOCO_HOST", "127.0.0.1")
 	port := getenv("MINICOCO_PORT", "8017")
 	addr := host + ":" + port
@@ -53,6 +67,7 @@ func main() {
 	http.HandleFunc("/chat/stream", handleChatStream)
 	http.HandleFunc("/sessions", handleSessions)
 	http.HandleFunc("/sessions/", handleSessions)
+	http.HandleFunc("/trace/", handleTrace)
 
 	route, _ := routeFor("")
 	route, _ = effectiveRoute(route)
@@ -60,8 +75,22 @@ func main() {
 	fmt.Printf("[MiniCoco backend] http://%s  (provider=%s, model=%s, family=%s, loop=%s)\n", addr, route.Provider, route.Name, route.Family, loopKey)
 	fmt.Println("  POST /chat/stream   GET /health   GET /sessions   GET /sessions/<id>")
 	server := &http.Server{Addr: addr, ReadHeaderTimeout: 5 * time.Second, ReadTimeout: 15 * time.Second, IdleTimeout: 60 * time.Second}
-	if err := server.ListenAndServe(); err != nil {
-		log.Fatal(err)
+	stopping, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
+	server.BaseContext = func(_ net.Listener) context.Context { return stopping }
+	errors := make(chan error, 1)
+	go func() { errors <- server.ListenAndServe() }()
+	select {
+	case err := <-errors:
+		if err != http.ErrServerClosed {
+			log.Print(err)
+		}
+	case <-stopping.Done():
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		if err := server.Shutdown(ctx); err != nil {
+			_ = server.Close()
+		}
 	}
 }
 
@@ -75,8 +104,9 @@ func handleHealth(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	loopKey, _ := selectedLoop()
-	writeJSON(w, http.StatusOK, map[string]string{
+	writeJSON(w, http.StatusOK, map[string]any{
 		"status": "ok", "provider": route.Provider, "model": route.Name, "loop_impl": loopKey,
+		"recentSessions": activeSessions.recentStats(r),
 	})
 }
 

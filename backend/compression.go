@@ -100,6 +100,7 @@ func (service *sessionService) compactContext(ctx context.Context, req ChatReque
 	if count < 1 || count > len(raw) {
 		return nil, cannotCompress("summary boundary exceeds committed history")
 	}
+	traceStage(ctx, "summary_request", nil)
 	summary, usage, err := summarize(ctx, current[:end], route)
 	if err != nil {
 		code, _ := classifyCompletionError(err)
@@ -123,6 +124,7 @@ func (service *sessionService) compactContext(ctx context.Context, req ChatReque
 	if err := service.meta.CommitRoundUsage(context.WithoutCancel(ctx), req.SessionID, checkpoint.UsageID, usage, len(raw)); err != nil {
 		return nil, storageFailure(err)
 	}
+	traceStage(ctx, "summary_committed", func(r *TraceRecord) { u := usage; r.Usage = &u })
 	return next, nil
 }
 func summarize(ctx context.Context, history []Message, route ModelRoute) (string, Usage, error) {

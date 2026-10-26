@@ -175,7 +175,7 @@ func TestLoopLocalConfigAndHealth(t *testing.T) {
 	t.Setenv("LOOP_IMPL", "test-v2") // Unregistered in production; health reports fallback.
 	response := httptest.NewRecorder()
 	handleHealth(response, httptest.NewRequest("GET", "/health", nil))
-	var body map[string]string
+	var body map[string]any
 	if err := json.Unmarshal(response.Body.Bytes(), &body); err != nil {
 		t.Fatal(err)
 	}

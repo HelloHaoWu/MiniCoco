@@ -1,6 +1,6 @@
 import type {Session} from './protocol.ts';
 
-async function readJSON(server: string, suffix: string, signal?: AbortSignal): Promise<unknown> {
+export async function readJSON(server: string, suffix: string, signal?: AbortSignal): Promise<unknown> {
     const url = new URL(server);
     if (!['http:', 'https:'].includes(url.protocol)) throw new Error('server must use HTTP or HTTPS');
     const timeout = AbortSignal.timeout(125_000);

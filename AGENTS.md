@@ -94,8 +94,16 @@ Part 1 已验收并推送 d3c0f5d，见 ChangeLog 004。Part 2 本次两档完�
 
 当前资料 Phase 1—9 共 30 个 Markdown 文件；Phase 1—5 已验收，Phase 6—9 按 Part 顺序推进。未实现 OS 沙箱、跨进程工具日志/副作用 exactly-once、XML 工具调用解析、原生 Anthropic 协议或真实缓存收益验证。摘要是有损视图，语义质量尚无真实模型实测；默认文件档仍整文件重写，长期原始日志与摘要文件会增长，当前无物理日志清理。1 MiB/512 条限制应用于模型视图，已有工具结果/请求大小限制不变。
 
-## 最新进度：Phase 6 Part 1（2026-10-26）
+## Phase 6 Part 1 历史验收（2026-10-26）
 
 Phase 6 Part 1：trace.go 定义无正文/参数的 TraceRecord；X-Trace-Id=sessionId-r<已提交轮序>，RoundID 区分失败尝试，成功回放复用轮序并标记 replay。阶段贯通 SSE/JSON、错误 code/retryable、路由 model/provider/family；工具结果和已提交工具调用分别记录，客户端错误保留 traceId。本 Part 仅埋点，生产持久化在 Part 2。
 
 本次默认 check.sh 与真实 check_realdb.sh 均通过：Go -race/vet/构建、默认零依赖、TS 类型检查、10 项工具自测和 53 项客户端测试；真实档覆盖率 83.5%。临时服务继续供下一 Part 使用。阶段实现及发布记录见 ChangeLog 006，下一步 Phase 6 Part 2；Phase 7—9 尚未实施。
+
+## 最新进度：Phase 6 完成（2026-10-26）
+
+Phase 6 Part 2：jsonl_sink.go 提供容量 1024 的共享异步 JSONL 队列，满时丢最旧、写失败隔离，SIGINT/SIGTERM 关闭 HTTP 后有界 flush。trace 写入 backend/data/logs/trace-<sid>.jsonl（随 MINICOCO_DATA_DIR）；trace_http.go 提供 GET /trace/<sid>?round=N 和 /health.recentSessions 最近 10 会话轮数/账本用量/日志错误数；client/src/trace.ts 提供 trace <sid> [--round N]。普通 usage 仍只由 CommitRoundUsage 去重；摘要以 summary_request/summary_committed 记录独立账本用量。回放只记 replay，不重复计量。
+
+本次 check.sh 与 check_realdb.sh 全通过：默认零依赖、Go -race/vet/构建、TS 类型检查、10 工具自测、54 客户端测试；默认覆盖率 83.5%，真实档 82.3%。专项覆盖三轮/回放/用量/health/过滤读取、真实写盘失败不影响 SSE、阻塞 writer 下丢最旧、CLI 时间线。未调用真实模型 API。
+
+日志为 best effort，队列丢弃/磁盘错误/崩溃可能缺记录；错误数来自日志且异步可延迟，不是交易账本。服务端时间线文件限 8 MiB，客户端响应限 4 MiB，超限明确报错，尚无轮转。日志不含正文/参数，禁止用 trace 再 BumpUsage。Part 1 已推送 f7a71ea，Part 2 发布见 ChangeLog 007；下一步 Phase 7 Part 1，Phase 7—9 尚未实现。
