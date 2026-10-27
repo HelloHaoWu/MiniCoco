@@ -14,7 +14,7 @@ import (
 
 func transcriptLines(t *testing.T, store *JSONLTranscriptStore, sid string) []Message {
 	t.Helper()
-	_, records, err := store.read(sid)
+	_, records, err := store.read(context.Background(), sid)
 	if err != nil {
 		t.Fatal(err)
 	}

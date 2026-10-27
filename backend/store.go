@@ -85,14 +85,15 @@ type TranscriptStore interface {
 }
 
 type StoredRound struct {
-	ID          string
-	ReplyID     string
-	Fingerprint string
-	BaseCount   int
-	InputCount  int
-	Final       bool
-	Usage       Usage
-	Events      []Event
+	PromptPrefixHash string
+	ID               string
+	ReplyID          string
+	Fingerprint      string
+	BaseCount        int
+	InputCount       int
+	Final            bool
+	Usage            Usage
+	Events           []Event
 }
 
 type Coordinator interface {

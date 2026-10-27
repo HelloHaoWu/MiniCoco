@@ -46,6 +46,8 @@ func pickLoop() LoopImpl {
 	return impl
 }
 
+func selectedLoopNameV2() bool { name, _ := selectedLoop(); return name == "v2" }
+
 func processRequestV1(ctx context.Context, req ChatRequest, emit func(Event)) error {
 	return activeSessions.process(ctx, req, emit)
 }

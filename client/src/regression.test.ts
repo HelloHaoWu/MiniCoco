@@ -311,11 +311,11 @@ test('trace CLI prints a filtered timeline and observed usage', async () => {
     await server((req, res) => {
         assert.equal(req.url, '/trace/s_test?round=3');
         res.setHeader('Content-Type', 'application/json');
-        res.end(JSON.stringify({records: [{round: 3, traceId: 's_test-r3', stage: 'llm_response', ts: 1, usage: {total: 2}}, {round: 3, traceId: 's_test-r3', stage: 'error', ts: 2, code: 'bad_request'}]}));
+        res.end(JSON.stringify({records: [{round: 3, traceId: 's_test-r3', stage: 'llm_response', ts: 1, usage: {total: 2}}, {round: 3, traceId: 's_test-r3', stage: 'error', ts: 2, code: 'bad_request', compact_latency_ms: 1.25, object_reads: 12, prompt_cache_prefix_stable: false}]}));
     }, async url => {
         const child = spawn(process.execPath, [path.join(project, 'client/src/cli.ts'), 'trace', 's_test', '--round', '3', '--server', url]);
         let output = '';child.stdout.on('data', chunk => {output += chunk;});
         assert.equal((await once(child, 'close'))[0], 0);
-        assert.match(output, /round 3/);assert.match(output, /error\{bad_request\}/);assert.match(output, /observed tokens=2/);
+        assert.match(output, /round 3/);assert.match(output, /error\{bad_request\}/);assert.match(output, /observed tokens=2/);assert.match(output, /compact_ms=1.25 object_reads=12 prefix_stable=false/);
     });
 });

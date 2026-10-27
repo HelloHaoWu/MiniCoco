@@ -7,6 +7,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"strings"
 	"time"
 
@@ -22,20 +23,21 @@ import (
 // JSON bytes preserve OpenAI field names and arbitrary JSON integer precision.
 // IDs/status/usage/order remain indexed, queryable BSON fields.
 type mongoEnvelope struct {
-	SessionID   string `bson:"sessionId"`
-	RoundID     string `bson:"roundId"`
-	MsgID       string `bson:"msgId,omitempty"`
-	Kind        string `bson:"kind"`
-	Status      string `bson:"status"`
-	Seq         int64  `bson:"seq"`
-	TS          int64  `bson:"ts"`
-	Input       []byte `bson:"inputJson,omitempty"`
-	Reply       []byte `bson:"replyJson,omitempty"`
-	Events      []byte `bson:"eventsJson,omitempty"`
-	Fingerprint string `bson:"fingerprint,omitempty"`
-	BaseCount   int    `bson:"baseCount"`
-	InputCount  int    `bson:"inputCount"`
-	Usage       Usage  `bson:"usage"`
+	SessionID        string `bson:"sessionId"`
+	PromptPrefixHash string `bson:"promptPrefixHash,omitempty"`
+	RoundID          string `bson:"roundId"`
+	MsgID            string `bson:"msgId,omitempty"`
+	Kind             string `bson:"kind"`
+	Status           string `bson:"status"`
+	Seq              int64  `bson:"seq"`
+	TS               int64  `bson:"ts"`
+	Input            []byte `bson:"inputJson,omitempty"`
+	Reply            []byte `bson:"replyJson,omitempty"`
+	Events           []byte `bson:"eventsJson,omitempty"`
+	Fingerprint      string `bson:"fingerprint,omitempty"`
+	BaseCount        int    `bson:"baseCount"`
+	InputCount       int    `bson:"inputCount"`
+	Usage            Usage  `bson:"usage"`
 }
 
 type MongoTranscriptStore struct {
@@ -106,15 +108,31 @@ func decodeMongoMessages(data []byte) ([]Message, error) {
 }
 
 func (store *MongoTranscriptStore) envelope(ctx context.Context, sid, rid string) (mongoEnvelope, error) {
+	if err := ctx.Err(); err != nil {
+		return mongoEnvelope{}, err
+	}
 	if !validSessionID(sid) {
 		return mongoEnvelope{}, ErrStoreInvalid
 	}
+	if value, hit := cachedRead(ctx, store.readKey(sid)); hit {
+		for _, row := range value.([]mongoEnvelope) {
+			if row.RoundID == rid {
+				return row, nil
+			}
+		}
+		return mongoEnvelope{}, ErrStoreNotFound
+	}
 	var document mongoEnvelope
 	err := store.messages.FindOne(ctx, bson.M{"sessionId": sid, "roundId": rid}).Decode(&document)
+	if err == nil {
+		countMongoReads(ctx, []mongoEnvelope{document})
+	}
 	return document, mongoStoreError(err)
 }
 
 func (store *MongoTranscriptStore) Append(ctx context.Context, sid, rid string, messages []Message) error {
+	invalidateRead(ctx, store.readKey(sid))
+	defer invalidateRead(ctx, store.readKey(sid))
 	if err := ctx.Err(); err != nil {
 		return err
 	}
@@ -142,6 +160,8 @@ func (store *MongoTranscriptStore) Append(ctx context.Context, sid, rid string, 
 }
 
 func (store *MongoTranscriptStore) PreoccupyReply(ctx context.Context, sid string) (string, error) {
+	invalidateRead(ctx, store.readKey(sid))
+	defer invalidateRead(ctx, store.readKey(sid))
 	if err := ctx.Err(); err != nil {
 		return "", err
 	}
@@ -184,6 +204,9 @@ func (store *MongoTranscriptStore) UpdateReply(ctx context.Context, id string, m
 	if err := store.messages.FindOne(ctx, bson.M{"sessionId": sid, "msgId": id}).Decode(&previous); err != nil {
 		return mongoStoreError(err)
 	}
+	countMongoReads(ctx, []mongoEnvelope{previous})
+	invalidateRead(ctx, store.readKey(sid))
+	defer invalidateRead(ctx, store.readKey(sid))
 	if previous.Kind != "reply" {
 		return ErrStoreInvalid
 	}
@@ -204,8 +227,14 @@ func (store *MongoTranscriptStore) UpdateReply(ctx context.Context, id string, m
 }
 
 func (store *MongoTranscriptStore) documents(ctx context.Context, sid string) ([]mongoEnvelope, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
 	if !validSessionID(sid) {
 		return nil, ErrStoreInvalid
+	}
+	if value, hit := cachedRead(ctx, store.readKey(sid)); hit {
+		return value.([]mongoEnvelope), nil
 	}
 	cursor, err := store.messages.Find(ctx, bson.M{"sessionId": sid}, options.Find().SetSort(bson.D{{Key: "seq", Value: 1}}))
 	if err != nil {
@@ -214,7 +243,29 @@ func (store *MongoTranscriptStore) documents(ctx context.Context, sid string) ([
 	defer cursor.Close(ctx)
 	var result []mongoEnvelope
 	err = cursor.All(ctx, &result)
+	if err == nil {
+		size := countMongoReads(ctx, result)
+		saveRead(ctx, store.readKey(sid), result, size)
+	}
 	return result, err
+}
+
+func (store *MongoTranscriptStore) readKey(sid string) string {
+	return fmt.Sprintf("mongo:%p:%s", store, sid)
+}
+func countMongoReads(ctx context.Context, rows []mongoEnvelope) int {
+	n, size := 0, 0
+	for _, row := range rows {
+		var input []json.RawMessage
+		_ = json.Unmarshal(row.Input, &input)
+		n += len(input)
+		if len(row.Reply) > 0 || row.Kind == "round" || row.Kind == "reply" {
+			n++
+		}
+		size += len(row.Input) + len(row.Reply) + len(row.Events) + len(row.SessionID) + len(row.RoundID) + len(row.MsgID) + len(row.Fingerprint) + 512
+	}
+	countObjectReads(ctx, n)
+	return size
 }
 
 func (store *MongoTranscriptStore) RawLatest(ctx context.Context, sid string, n int) ([]Message, error) {
@@ -306,7 +357,7 @@ func envelopeRound(document mongoEnvelope) (StoredRound, error) {
 			return StoredRound{}, err
 		}
 	}
-	return StoredRound{ID: document.RoundID, ReplyID: document.MsgID, Fingerprint: document.Fingerprint, BaseCount: document.BaseCount, InputCount: document.InputCount, Final: document.Status == "final", Usage: document.Usage, Events: events}, nil
+	return StoredRound{PromptPrefixHash: document.PromptPrefixHash, ID: document.RoundID, ReplyID: document.MsgID, Fingerprint: document.Fingerprint, BaseCount: document.BaseCount, InputCount: document.InputCount, Final: document.Status == "final", Usage: document.Usage, Events: events}, nil
 }
 
 func (store *MongoTranscriptStore) Round(ctx context.Context, sid, rid string) (StoredRound, error) {
@@ -318,6 +369,8 @@ func (store *MongoTranscriptStore) Round(ctx context.Context, sid, rid string) (
 }
 
 func (store *MongoTranscriptStore) ReserveRound(ctx context.Context, sid, rid, fingerprint string, input []Message, baseCount int) (StoredRound, error) {
+	invalidateRead(ctx, store.readKey(sid))
+	defer invalidateRead(ctx, store.readKey(sid))
 	if err := ctx.Err(); err != nil {
 		return StoredRound{}, err
 	}
@@ -362,6 +415,8 @@ func (store *MongoTranscriptStore) ReserveRound(ctx context.Context, sid, rid, f
 }
 
 func (store *MongoTranscriptStore) CommitRound(ctx context.Context, sid, rid string, reply Message, usage Usage, events []Event) error {
+	invalidateRead(ctx, store.readKey(sid))
+	defer invalidateRead(ctx, store.readKey(sid))
 	if err := ctx.Err(); err != nil {
 		return err
 	}
@@ -383,7 +438,7 @@ func (store *MongoTranscriptStore) CommitRound(ctx context.Context, sid, rid str
 	if err != nil {
 		return err
 	}
-	result, err := store.messages.UpdateOne(ctx, bson.M{"sessionId": sid, "roundId": rid, "kind": "round", "status": "pending"}, bson.M{"$set": bson.M{"status": "final", "replyJson": replyJSON, "usage": usage, "eventsJson": eventJSON}})
+	result, err := store.messages.UpdateOne(ctx, bson.M{"sessionId": sid, "roundId": rid, "kind": "round", "status": "pending"}, bson.M{"$set": bson.M{"status": "final", "replyJson": replyJSON, "usage": usage, "eventsJson": eventJSON, "promptPrefixHash": promptPrefixFromContext(ctx)}})
 	if err != nil {
 		return err
 	}

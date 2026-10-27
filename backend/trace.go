@@ -9,22 +9,25 @@ import (
 // Payloads, prompts, arguments and model text deliberately never enter traces.
 // RoundID disambiguates different failed requests at the same committed ordinal.
 type TraceRecord struct {
-	TraceID    string `json:"traceId"`
-	SessionID  string `json:"sessionId"`
-	RoundID    string `json:"roundId"`
-	Round      int    `json:"round"`
-	Stage      string `json:"stage"`
-	Model      string `json:"model"`
-	Provider   string `json:"provider"`
-	Family     string `json:"family"`
-	Slash      string `json:"slash,omitempty"`
-	Tool       string `json:"tool,omitempty"`
-	Usage      *Usage `json:"usage,omitempty"`
-	Code       string `json:"code,omitempty"`
-	Retryable  *bool  `json:"retryable,omitempty"`
-	Replay     bool   `json:"replay,omitempty"`
-	DurationMs int64  `json:"durationMs"`
-	Ts         int64  `json:"ts"`
+	CompactLatencyMs        *float64 `json:"compact_latency_ms,omitempty"`
+	ObjectReads             *int64   `json:"object_reads,omitempty"`
+	PromptCachePrefixStable *bool    `json:"prompt_cache_prefix_stable,omitempty"`
+	TraceID                 string   `json:"traceId"`
+	SessionID               string   `json:"sessionId"`
+	RoundID                 string   `json:"roundId"`
+	Round                   int      `json:"round"`
+	Stage                   string   `json:"stage"`
+	Model                   string   `json:"model"`
+	Provider                string   `json:"provider"`
+	Family                  string   `json:"family"`
+	Slash                   string   `json:"slash,omitempty"`
+	Tool                    string   `json:"tool,omitempty"`
+	Usage                   *Usage   `json:"usage,omitempty"`
+	Code                    string   `json:"code,omitempty"`
+	Retryable               *bool    `json:"retryable,omitempty"`
+	Replay                  bool     `json:"replay,omitempty"`
+	DurationMs              int64    `json:"durationMs"`
+	Ts                      int64    `json:"ts"`
 }
 
 type roundTrace struct {
@@ -72,6 +75,9 @@ func traceStage(ctx context.Context, stage string, decorate func(*TraceRecord)) 
 	t.last = now
 	if decorate != nil {
 		decorate(&r)
+	}
+	if stage == "sse_done" || stage == "error" {
+		decorateContextMetrics(ctx, &r)
 	}
 	if t.emit != nil {
 		t.emit(r)

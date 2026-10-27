@@ -1,0 +1,5 @@
+[
+  {"name":"coding","facts":["decision=Go","path=src/main.go","unresolved=add tests","constraint=no network","conclusion=keep API"],"delta":["decision=bounded cache","path=src/cache.go"]},
+  {"name":"中文约束","facts":["decision=保留现有接口","path=服务/存储.go","unresolved=恢复验证","constraint=不删除原始日志","conclusion=文件档单写"],"delta":["decision=启用增量","path=服务/摘要.go"]},
+  {"name":"long-lived-policy","facts":["decision=readonly audit","path=/workspace/a b.ts","unresolved=review permissions","constraint=never print credentials","conclusion=approval required"],"delta":["decision=record findings","path=reports/review.md"]}
+]

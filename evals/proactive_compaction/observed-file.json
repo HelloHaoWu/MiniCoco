@@ -1,0 +1,144 @@
+{
+  "date": "2026-10-28",
+  "profile": "file",
+  "provider": "local deterministic HTTP fixture",
+  "injected_summary_latency_ms": 40,
+  "scope": "Per-request successful physical transcript message reads, excluding summaries/metadata/idle workers. Elapsed time is observational, not a real-provider benchmark.",
+  "measurements": [
+    {
+      "case": "coding",
+      "profile": "baseline",
+      "object_reads": 52,
+      "compact_latency_ms": 52.211125,
+      "summary_calls": 1,
+      "refine_calls": 0,
+      "summary_input_bytes": 7008
+    },
+    {
+      "case": "coding",
+      "profile": "hit",
+      "object_reads": 12,
+      "compact_latency_ms": 12.696166,
+      "summary_calls": 0,
+      "refine_calls": 0,
+      "summary_input_bytes": 0
+    },
+    {
+      "case": "coding",
+      "profile": "delta",
+      "object_reads": 16,
+      "compact_latency_ms": 60.17425,
+      "summary_calls": 0,
+      "refine_calls": 1,
+      "summary_input_bytes": 223
+    },
+    {
+      "case": "coding",
+      "profile": "miss",
+      "object_reads": 12,
+      "compact_latency_ms": 52.222125,
+      "summary_calls": 1,
+      "refine_calls": 0,
+      "summary_input_bytes": 7008
+    },
+    {
+      "case": "coding",
+      "profile": "worker-failure",
+      "object_reads": 12,
+      "compact_latency_ms": 51.254875,
+      "summary_calls": 1,
+      "refine_calls": 0,
+      "summary_input_bytes": 7008
+    },
+    {
+      "case": "中文约束",
+      "profile": "baseline",
+      "object_reads": 52,
+      "compact_latency_ms": 49.734333,
+      "summary_calls": 1,
+      "refine_calls": 0,
+      "summary_input_bytes": 7050
+    },
+    {
+      "case": "中文约束",
+      "profile": "hit",
+      "object_reads": 12,
+      "compact_latency_ms": 11.748084,
+      "summary_calls": 0,
+      "refine_calls": 0,
+      "summary_input_bytes": 0
+    },
+    {
+      "case": "中文约束",
+      "profile": "delta",
+      "object_reads": 16,
+      "compact_latency_ms": 51.935458,
+      "summary_calls": 0,
+      "refine_calls": 1,
+      "summary_input_bytes": 268
+    },
+    {
+      "case": "中文约束",
+      "profile": "miss",
+      "object_reads": 12,
+      "compact_latency_ms": 55.2285,
+      "summary_calls": 1,
+      "refine_calls": 0,
+      "summary_input_bytes": 7050
+    },
+    {
+      "case": "中文约束",
+      "profile": "worker-failure",
+      "object_reads": 12,
+      "compact_latency_ms": 49.94,
+      "summary_calls": 1,
+      "refine_calls": 0,
+      "summary_input_bytes": 7050
+    },
+    {
+      "case": "long-lived-policy",
+      "profile": "baseline",
+      "object_reads": 52,
+      "compact_latency_ms": 55.205875,
+      "summary_calls": 1,
+      "refine_calls": 0,
+      "summary_input_bytes": 7057
+    },
+    {
+      "case": "long-lived-policy",
+      "profile": "hit",
+      "object_reads": 12,
+      "compact_latency_ms": 33.664167,
+      "summary_calls": 0,
+      "refine_calls": 0,
+      "summary_input_bytes": 0
+    },
+    {
+      "case": "long-lived-policy",
+      "profile": "delta",
+      "object_reads": 16,
+      "compact_latency_ms": 60.555542,
+      "summary_calls": 0,
+      "refine_calls": 1,
+      "summary_input_bytes": 279
+    },
+    {
+      "case": "long-lived-policy",
+      "profile": "miss",
+      "object_reads": 12,
+      "compact_latency_ms": 54.956375,
+      "summary_calls": 1,
+      "refine_calls": 0,
+      "summary_input_bytes": 7057
+    },
+    {
+      "case": "long-lived-policy",
+      "profile": "worker-failure",
+      "object_reads": 12,
+      "compact_latency_ms": 55.77025,
+      "summary_calls": 1,
+      "refine_calls": 0,
+      "summary_input_bytes": 7057
+    }
+  ]
+}

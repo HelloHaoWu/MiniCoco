@@ -55,7 +55,7 @@ func cloneStoreMessage(message Message) (Message, error) {
 			return nil, fmt.Errorf("%w: content must be a string or null", ErrStoreInvalid)
 		}
 	}
-	for _, key := range []string{"msg_id", "round_id", "status", "usage", "events", "request_hash", "base_count", "input_count"} {
+	for _, key := range []string{"msg_id", "round_id", "status", "usage", "events", "request_hash", "base_count", "input_count", "prompt_prefix_hash"} {
 		if _, exists := message[key]; exists {
 			return nil, fmt.Errorf("%w: reserved message field %s", ErrStoreInvalid, key)
 		}
@@ -77,6 +77,7 @@ func cloneStoreMessage(message Message) (Message, error) {
 // This avoids partial multi-message rounds being mistaken for committed rounds
 // after a crash. This small single-process implementation rewrites the full log.
 func appendStoreRecords(ctx context.Context, path string, old []byte, records []Message) error {
+	defer invalidateRead(ctx, path)
 	var buffer bytes.Buffer
 	buffer.Write(old)
 	encoder := json.NewEncoder(&buffer)
@@ -88,12 +89,18 @@ func appendStoreRecords(ctx context.Context, path string, old []byte, records []
 	return atomicStoreFile(ctx, path, buffer.Bytes())
 }
 
-func (store *JSONLTranscriptStore) read(sid string) ([]byte, []Message, error) {
+func (store *JSONLTranscriptStore) read(ctx context.Context, sid string) ([]byte, []Message, error) {
 	path, err := store.path(sid)
 	if err != nil {
 		return nil, nil, err
 	}
-	data, err := os.ReadFile(path)
+	var data []byte
+	cached, hit := cachedRead(ctx, path)
+	if hit {
+		data = cached.([]byte)
+	} else {
+		data, err = os.ReadFile(path)
+	}
 	if os.IsNotExist(err) {
 		return nil, []Message{}, nil
 	}
@@ -126,6 +133,10 @@ func (store *JSONLTranscriptStore) read(sid string) ([]byte, []Message, error) {
 		}
 		records = append(records, record)
 	}
+	if !hit {
+		countObjectReads(ctx, len(records))
+		saveRead(ctx, path, data, len(data))
+	}
 	return data, records, nil
 }
 
@@ -138,7 +149,7 @@ func (store *JSONLTranscriptStore) Append(ctx context.Context, sid, roundID stri
 	if roundID == "" || len(roundID) > 256 || len(messages) == 0 {
 		return ErrStoreInvalid
 	}
-	old, records, err := store.read(sid)
+	old, records, err := store.read(ctx, sid)
 	if err != nil {
 		return err
 	}
@@ -170,7 +181,7 @@ func (store *JSONLTranscriptStore) PreoccupyReply(ctx context.Context, sid strin
 	if err := ctx.Err(); err != nil {
 		return "", err
 	}
-	old, _, err := store.read(sid)
+	old, _, err := store.read(ctx, sid)
 	if err != nil {
 		return "", err
 	}
@@ -203,7 +214,7 @@ func (store *JSONLTranscriptStore) UpdateReply(ctx context.Context, msgID string
 	if record["role"] != "assistant" || !validUsage(usage) {
 		return ErrStoreInvalid
 	}
-	old, records, err := store.read(sid)
+	old, records, err := store.read(ctx, sid)
 	if err != nil {
 		return err
 	}
@@ -241,7 +252,7 @@ func (store *JSONLTranscriptStore) RawLatest(ctx context.Context, sid string, n 
 	if n < 0 {
 		return nil, ErrStoreInvalid
 	}
-	_, records, err := store.read(sid)
+	_, records, err := store.read(ctx, sid)
 	if err != nil {
 		return nil, err
 	}
@@ -272,7 +283,7 @@ func (store *JSONLTranscriptStore) RawLatest(ctx context.Context, sid string, n 
 		if record["status"] == "pending" {
 			continue
 		}
-		for _, key := range []string{"msg_id", "round_id", "status", "usage", "events", "request_hash", "base_count", "input_count"} {
+		for _, key := range []string{"msg_id", "round_id", "status", "usage", "events", "request_hash", "base_count", "input_count", "prompt_prefix_hash"} {
 			delete(record, key)
 		}
 		messages = append(messages, record)

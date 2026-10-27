@@ -19,19 +19,20 @@ var embeddedModels []byte
 // MaxTokens is a configured context-budget ceiling used by the v2 estimator,
 // not the provider's output max_tokens parameter or an enforced token counter.
 type ModelRoute struct {
-	mcpTools       []MCPToolSpec
-	memoryIndex    string
-	agentType      string
-	scene          string
-	effective      bool
-	Name           string  `json:"-"`
-	Provider       string  `json:"provider"`
-	BaseURL        string  `json:"baseURL"`
-	Family         string  `json:"family"`
-	MaxTokens      int     `json:"maxTokens"`
-	IsFunctionCall bool    `json:"isFunctionCall"`
-	Temperature    float64 `json:"temperature"`
-	Thinking       string  `json:"thinking,omitempty"`
+	workingConstraints string
+	mcpTools           []MCPToolSpec
+	memoryIndex        string
+	agentType          string
+	scene              string
+	effective          bool
+	Name               string  `json:"-"`
+	Provider           string  `json:"provider"`
+	BaseURL            string  `json:"baseURL"`
+	Family             string  `json:"family"`
+	MaxTokens          int     `json:"maxTokens"`
+	IsFunctionCall     bool    `json:"isFunctionCall"`
+	Temperature        float64 `json:"temperature"`
+	Thinking           string  `json:"thinking,omitempty"`
 }
 
 type modelRouteContextKey struct{}

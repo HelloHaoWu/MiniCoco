@@ -159,6 +159,11 @@ func (service *sessionService) reconcile(ctx context.Context, sid string) error 
 	if err != nil {
 		return err
 	}
+	if m := metricsFor(ctx); m != nil && len(rounds) > 0 {
+		m.mu.Lock()
+		m.previous = rounds[len(rounds)-1].PromptPrefixHash
+		m.mu.Unlock()
+	}
 	for _, round := range rounds {
 		if err := service.meta.CommitRoundUsage(ctx, sid, round.ID, round.Usage, round.BaseCount+round.InputCount+1); err != nil {
 			return err
@@ -235,6 +240,11 @@ func (service *sessionService) process(ctx context.Context, req ChatRequest, emi
 	route.scene = req.Slash
 	route.mcpTools = req.MCPTools
 	route.memoryIndex = req.MemoryIndex
+	constraints, err := loadWorkingConstraints()
+	if err != nil {
+		return completionFailure(codeConfig, false, err.Error(), err)
+	}
+	route.workingConstraints = constraints[req.Workspace]
 	ctx = context.WithValue(ctx, modelRouteContextKey{}, route)
 	formatIdentity := ""
 	if !isFunctionCall {
@@ -260,7 +270,8 @@ func (service *sessionService) process(ctx context.Context, req ChatRequest, emi
 		Slash             string             `json:",omitempty"`
 		MCPTools          []MCPToolSpec      `json:",omitempty"`
 		MemoryIndex       string             `json:",omitempty"`
-	}{req.Query, req.ToolUseResults, req.Workspace, req.Model, identityMode, formatIdentity, req.AgentType, req.ParentSessionID, req.BackgroundResults, req.Slash, req.MCPTools, req.MemoryIndex})
+		Constraints       string             `json:",omitempty"`
+	}{req.Query, req.ToolUseResults, req.Workspace, req.Model, identityMode, formatIdentity, req.AgentType, req.ParentSessionID, req.BackgroundResults, req.Slash, req.MCPTools, req.MemoryIndex, route.workingConstraints})
 	hash := sha256.Sum256(encoded)
 	fingerprint := hex.EncodeToString(hash[:])
 	round, roundErr := service.transcript.Round(ctx, req.SessionID, req.RoundID)
@@ -338,6 +349,8 @@ func (service *sessionService) process(ctx context.Context, req ChatRequest, emi
 	if err != nil {
 		return err
 	}
+	previousPrefix := previousPromptPrefix(ctx)
+	recordPromptPrefix(ctx, messages, tools, current, route, previousPrefix)
 	traceStage(ctx, "prompt_built", nil)
 	buffer := eventBuffer{events: []Event{}}
 	usage := Usage{}
@@ -387,6 +400,7 @@ func (service *sessionService) process(ctx context.Context, req ChatRequest, emi
 		if err != nil {
 			return err
 		}
+		recordPromptPrefix(ctx, messages, tools, current, route, previousPrefix)
 	}
 	if err := ctx.Err(); err != nil {
 		return err

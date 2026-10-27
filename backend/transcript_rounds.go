@@ -15,14 +15,15 @@ func storedRounds(records []Message) ([]StoredRound, error) {
 			continue
 		}
 		var wire struct {
-			ID          string  `json:"round_id"`
-			ReplyID     string  `json:"msg_id"`
-			Fingerprint string  `json:"request_hash"`
-			BaseCount   int     `json:"base_count"`
-			InputCount  int     `json:"input_count"`
-			Status      string  `json:"status"`
-			Usage       Usage   `json:"usage"`
-			Events      []Event `json:"events"`
+			ID               string  `json:"round_id"`
+			PromptPrefixHash string  `json:"prompt_prefix_hash"`
+			ReplyID          string  `json:"msg_id"`
+			Fingerprint      string  `json:"request_hash"`
+			BaseCount        int     `json:"base_count"`
+			InputCount       int     `json:"input_count"`
+			Status           string  `json:"status"`
+			Usage            Usage   `json:"usage"`
+			Events           []Event `json:"events"`
 		}
 		data, err := json.Marshal(record)
 		if err != nil {
@@ -37,7 +38,7 @@ func storedRounds(records []Message) ([]StoredRound, error) {
 		if _, exists := rounds[wire.ID]; !exists {
 			order = append(order, wire.ID)
 		}
-		rounds[wire.ID] = StoredRound{ID: wire.ID, ReplyID: wire.ReplyID, Fingerprint: wire.Fingerprint, BaseCount: wire.BaseCount, InputCount: wire.InputCount, Final: wire.Status == "final", Usage: wire.Usage, Events: wire.Events}
+		rounds[wire.ID] = StoredRound{PromptPrefixHash: wire.PromptPrefixHash, ID: wire.ID, ReplyID: wire.ReplyID, Fingerprint: wire.Fingerprint, BaseCount: wire.BaseCount, InputCount: wire.InputCount, Final: wire.Status == "final", Usage: wire.Usage, Events: wire.Events}
 	}
 	result := make([]StoredRound, 0, len(order))
 	for _, id := range order {
@@ -65,7 +66,7 @@ func (store *JSONLTranscriptStore) Round(ctx context.Context, sid, roundID strin
 	if err := ctx.Err(); err != nil {
 		return StoredRound{}, err
 	}
-	_, records, err := store.read(sid)
+	_, records, err := store.read(ctx, sid)
 	if err != nil {
 		return StoredRound{}, err
 	}
@@ -81,7 +82,7 @@ func (store *JSONLTranscriptStore) ReserveRound(ctx context.Context, sid, roundI
 	if roundID == "" || len(roundID) > 256 || len(fingerprint) != 64 || len(input) == 0 || baseCount < 0 {
 		return StoredRound{}, ErrStoreInvalid
 	}
-	old, records, err := store.read(sid)
+	old, records, err := store.read(ctx, sid)
 	if err != nil {
 		return StoredRound{}, err
 	}
@@ -135,7 +136,7 @@ func (store *JSONLTranscriptStore) CommitRound(ctx context.Context, sid, roundID
 	if record["role"] != "assistant" {
 		return ErrStoreInvalid
 	}
-	old, records, err := store.read(sid)
+	old, records, err := store.read(ctx, sid)
 	if err != nil {
 		return err
 	}
@@ -149,6 +150,9 @@ func (store *JSONLTranscriptStore) CommitRound(ctx context.Context, sid, roundID
 	record["msg_id"], record["round_id"], record["status"] = round.ReplyID, roundID, "final"
 	record["request_hash"], record["base_count"], record["input_count"] = round.Fingerprint, round.BaseCount, round.InputCount
 	record["usage"], record["events"] = usage, events
+	if hash := promptPrefixFromContext(ctx); hash != "" {
+		record["prompt_prefix_hash"] = hash
+	}
 	path, _ := store.path(sid)
 	return appendStoreRecords(ctx, path, old, []Message{record})
 }
@@ -159,7 +163,7 @@ func (store *JSONLTranscriptStore) CommittedRounds(ctx context.Context, sid stri
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
-	_, records, err := store.read(sid)
+	_, records, err := store.read(ctx, sid)
 	if err != nil {
 		return nil, err
 	}

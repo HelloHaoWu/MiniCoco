@@ -24,6 +24,7 @@
 - backend/loop_registry.go：LoopImpl、registerLoop、并发安全选择、LOOP_IMPL 与未知回退；v1 委托现有持久化服务。agentloop.go 的共享入口贯通 SSE/JSON；main.go 启动日志和 health.loop_impl 显示实际选择。loop_registry_test.go 验证分流/取消/回放/配置，prompt_cache_test.go 验证静态 hash、上游字节、历史追加和模拟缓存用量。
 - backend/context_budget.go / compression.go / context_history*.go：v2 估算预算、micro/full 摘要、主动/反应式压缩、进度限制、锁/限流与摘要视图；RawLatest 保留原始幂等/恢复依据，Latest 合并校验后的摘要；源指纹与独立用量账本保证重开和回写恢复。
 - backend/precompact.go / compression_reuse.go：可选后台预压、候选校验与复用、delta 折叠及派生检查点提交；仅 v2 显式启用，默认关闭。候选不直接改变 Latest，正式采用后才影响模型视图。
+- backend/context_metrics.go / constraints.go：请求内有界读取快照、写入失效、压缩/存储读取/前缀度量，以及显式配置的固定工作约束；evals/proactive_compaction/ 提供确定性语料、入口和观测报告。
 - backend/models.go / models.json：内嵌路由表、完整外部替代表、严格配置校验与单轮快照；llm.go 使用路由 provider/baseURL/temperature/thinking。prompts/system_openai.txt 与 system_claude.txt 按 family 选择；工作区仅注入首条 user 环境消息，不写 transcript。
 - backend/toolresult.go：Formatter、NativeFormatter、XmlFormatter、完整批次身份校验、请求顺序、已存格式识别及结果预算；prompt.go 在 MINICOCO_DEBUG_PROMPT=1 时输出完整 messages。toolresult_test.go、client/src/toolresult.test.ts 和真实档专项覆盖两轨落库/恢复/回放。
 - backend/sessions.go：稳定首轮会话、已提交历史、输入/预占、模型调用、final 和元数据回写、成功事件回放；session_http.go 提供列表和恢复元数据。
@@ -68,7 +69,7 @@ Redis 提供 TTL 锁、Lua CAS 解锁、固定窗口限流和 feature_toggle 开
 
 ## 阶段与验证状态
 
-当前研发阶段：Phase 1—9 已验收，Phase 10 Part 1/2 已完成两档验收；Part 3 未实施。最新发布见上层 ChangeLogs/2026-10-28-001-phase10-part2-reuse-delta.md。预压及复用仍默认关闭；启用后支持候选精确复用、delta 折叠及同步兜底。真实模型摘要质量与性能收益待 Part 3 验证。
+当前研发阶段：Phase 1—10 全部现有 Part 已通过对应本地验收。Phase 10 Part 3 已完成默认及真实数据库档验收，最新发布见上层 ChangeLogs/2026-10-28-002-phase10-part3-metrics-constraints-eval.md。预压、复用及读取快照保持默认关闭；显式启用后提供命中/delta/同步兜底、读取优化及可观测度量。确定性摘要质量 eval 已通过，真实模型语义质量、供应商缓存命中和长期性能收益仍未验证。
 
 从仓库根目录执行，默认要求 Go ≥ 1.22、Node ≥ 24：
 
@@ -189,7 +190,21 @@ check.sh 与 check_realdb.sh 均通过：默认零依赖、Go -race/vet/构建�
 
 本次 bash check.sh 通过：默认零依赖检查、Go -race/vet/构建（Go 测试缓存命中，覆盖率 83.3%）、TS 类型检查、10 项工具自测及 73 项客户端测试（12 文件）。扩展已有回归验证分片正文、单次/连续输入只输出一次、请求次数不增加，以及默认/v1/v2/未知回退下真实 Go+CLI 输出一次且会话消息数/用量不变。本次未运行可选真实数据库档，未改后端、协议或存储；测试使用临时端口和 mock/模拟上游，未调用真实模型或停止用户后端。
 
-## Phase 10 Part 2 实现与验收（2026-10-28）
+## Phase 10 Part 3 实现与验收（2026-10-28）
+
+- context_metrics.go 提供三项终端 trace 度量（sse_done/error）：compact_latency_ms 为所有同步压缩尝试累计耗时（含锁/存储/模型等待，排除 idle 预压）；object_reads 为本请求成功从存储读取的 transcript 消息对象累计数（含 pending/final，重复回源重复计数，不含摘要/元数据/Redis/后台）；prompt_cache_prefix_stable 比较当前与上一成功轮的固定消息+tools+摘要锚点诊断 hash。首轮/旧无 hash/回放为 unknown；采用新摘要为 false，后续锚点未变才为 true；不能当供应商缓存命中率。
+- 固定前缀诊断包含主 system、动态 memory、固定约束、环境、tools、摘要和模型/端点身份。成功轮原子保存 PromptPrefixHash，重开可比较；失败不推进参照轮，回放无新 prompt 度量。客户端 trace 校验并显示三项，旧 trace 兼容。摘要/权限正文不写 trace。
+- 启用预压的 v2 请求在会话租约获取后创建读取快照，文件档复用原始字节、Mongo 复用返回 envelope，写入前后失效、不缓存摘要、取消检查优先。每请求最多缓存 16 MiB，超限绕过缓存，无跨请求缓存。RawLatest/轮次预占/回写与用量权威保持；仍需完整冷读/校验，文件档仍整文件重写及重复解析，不是 O(delta) 的存储读取。
+- MINICOCO_CONSTRAINTS_FILE 显式指定 JSON：绝对工作区路径→约束文本，64 KiB 文件/最多 64 项/每项 8 KiB；不自动读取工作区配置。每轮快照、计入指纹，同 roundId 换约束拒绝。permissions 留在主 system，工作约束是额外 system，结构上位于 chooseRange/trim 的历史输入之外；固定预算不足报错。不靠模型从自然语言自动抽取权限；普通未固定历史要求仍有摘要损失风险，工具审批/mode 继续强制执行，提示词不是 OS 沙箱。
+- summaryPrompt 明确保留显式约束；旧候选配置指纹因此失配，走同步兜底，已有正式摘要仍有效。MINICOCO_PRECOMPACT_RATIO=1 关闭调度、复用及读取快照，仍保留度量、约束和已正式提交摘要；本地确定性 eval 通过后仍保持默认 opt-in，没有引入快模型或更改路由温度。
+- evals/proactive_compaction/cases.json 为 3 组语料，15 个 baseline/hit/delta/miss/worker-failure 场景；包含零摘要调用、一次增量且输入减少、读取至少减半、失败兜底、缺事实/冲突负控、pin 在丢约束摘要及 trim 后仍原文存在、预算拒绝、首次/替换前缀失效、追加/重启稳定、memory 变化失效、回放及同轮换约束拒绝。确定性事实匹配不等于真实模型开放语义质量。
+- 本次 check.sh / check_realdb.sh 均退出 0：默认零第三方模块/禁下载空缓存/无 cgo、Go -race/vet/构建、真实驱动包含、TS 类型检查、10 工具自测及 73 客户端测试（12 文件）通过；默认/真实档 Go 覆盖率 84.2%/83.3%。独立 bash evals/proactive_compaction/run.sh 通过；GO_TEST_JSON=1 可输出机器可读事件。新增 6 个默认 Go 顶层测试和 2 个真实档共享测试。
+- observed-file.json 为本机观测：coding 组 object_reads 基线/命中/delta=52/12/16，摘要输入=7008/0/223 字节，注入 40ms 模型延迟后压缩耗时约 52/13/60ms。降低读取来自请求快照，miss 也受益；delta 虽输入小仍需模型调用，不保证总是更快，命中也有持久化成本。没有声称供应商缓存失效率下降或真实质量/费用收益已证实。
+- 两层 AGENTS、README、.env.example、阶段实际适配说明及 ChangeLogs 已检查同步。发布见 ChangeLogs/2026-10-28-002-phase10-part3-metrics-constraints-eval.md；根层文档仍在仓库外。旧二进制不保证读取新轮次字段；配置文件须随部署保留，不自动变成会话授权状态。
+
+## Phase 10 Part 2 历史实现与验收（2026-10-28）
+
+以下保留当时的验收边界；当前度量、读取优化和 eval 状态以 Part 3 为准。
 
 - compactContext 在既有锁、选段和 raw/view 映射内只读选择候选；不获取 precompact 锁、不等后台任务。原始 PrefixHash、实际输入 SourceHash、有效模型配置/summaryPrompt 的 ConfigHash、完整 Native/XML 批次及缩减进度均须匹配。忽略损坏、已消费及覆盖超过目标的候选，优先覆盖最长的有效候选。
 - 精确覆盖直接采用已保存正文，摘要模型调用为 0，不占用摘要模型限流额度；较短覆盖只将 previousSummary 与 raw[PrefixCount:count] 发给同模型一次 refineSummary。foldPrompt 要求保留 decisions/paths/unresolved/约束、合并新增信息并去重；输出不超过 8 KiB，消息数与估算 token 都必须下降。

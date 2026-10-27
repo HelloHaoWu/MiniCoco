@@ -27,6 +27,9 @@ func genPrompt(history []map[string]any, workspace string, mode Mode, route Mode
 	// environment and chronological history without rewriting their prefix.
 	messages := make([]map[string]any, 0, len(history)+3)
 	messages = append(messages, map[string]any{"role": "system", "content": system}, map[string]any{"role": "system", "content": memoryReminder(route.memoryIndex)})
+	if pinned := constraintPrompt(route.workingConstraints); pinned != "" {
+		messages = append(messages, map[string]any{"role": "system", "content": pinned})
+	}
 	if workspace != "" {
 		messages = append(messages, map[string]any{"role": "user", "content": environmentText(workspace)})
 	}

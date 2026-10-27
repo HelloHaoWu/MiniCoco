@@ -91,6 +91,7 @@ func budgetFor(history []Message, workspace string, mode Mode, route ModelRoute)
 		return tokenBudget{}, err
 	}
 	base := textTokens(system) + textTokens(string(raw)) + textTokens(memoryReminder(route.memoryIndex))
+	base += textTokens(constraintPrompt(route.workingConstraints))
 	if workspace != "" {
 		base += textTokens(environmentText(workspace))
 	}

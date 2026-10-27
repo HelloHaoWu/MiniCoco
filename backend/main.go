@@ -45,6 +45,9 @@ func main() {
 	if err != nil {
 		log.Fatal(err)
 	}
+	if _, err := loadWorkingConstraints(); err != nil {
+		log.Fatal(err)
+	}
 	var closeStores func()
 	startup, stopStartup := context.WithTimeout(context.Background(), 15*time.Second)
 	activeSessions, closeStores, err = wireStores(startup, getenv("MINICOCO_DATA_DIR", "data"))
@@ -174,6 +177,7 @@ func handleChatStream(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	defer unlock()
+	ctx = withContextMetrics(ctx, selectedLoopNameV2() && activeSessions.precompact != nil && activeSessions.precompact.ratio != 1)
 	ctx = activeSessions.traceContext(ctx, req)
 	if t, ok := ctx.Value(traceContextKey{}).(*roundTrace); ok {
 		w.Header().Set("X-Trace-Id", t.base.TraceID)

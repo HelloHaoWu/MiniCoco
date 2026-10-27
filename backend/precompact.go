@@ -16,8 +16,8 @@ const precompactLease = 2 * time.Minute
 const precompactRateWindow = 30 * time.Second
 const precompactConcurrency = 2
 
-// Precompression and reuse stay opt-in until the Part 3 quality gate passes.
-// 1 disables new scheduling/reuse without deleting existing checkpoints.
+// Precompression and reuse remain opt-in after the deterministic quality gate.
+// 1 disables scheduling/reuse/read snapshots, retaining existing checkpoints.
 func precompactRatioFromEnv() (float64, error) {
 	ratio, err := strconv.ParseFloat(getenv("MINICOCO_PRECOMPACT_RATIO", "1"), 64)
 	if err != nil || math.IsNaN(ratio) || math.IsInf(ratio, 0) || (ratio != 1 && (ratio <= 0 || ratio >= fullRatio)) {
