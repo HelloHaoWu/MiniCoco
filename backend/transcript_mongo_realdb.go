@@ -274,12 +274,14 @@ func (store *MongoTranscriptStore) SaveSummary(ctx context.Context, sid string, 
 	if err != nil {
 		return err
 	}
-	doc := bson.M{"checkpointJson": data, "sessionId": sid, "originStartId": summary.OriginStartID, "originEndId": summary.OriginEndID, "content": summary.Content, "ts": time.Now().UnixMilli()}
-	if summary.Ready {
+	// Stable computation keys are not chronological. Preserve insertion ordering
+	// separately so equal-range formal checkpoints behave like the file store.
+	doc := bson.M{"orderId": bson.NewObjectID(), "checkpointJson": data, "sessionId": sid, "originStartId": summary.OriginStartID, "originEndId": summary.OriginEndID, "content": summary.Content, "ts": time.Now().UnixMilli()}
+	if summary.Ready || summary.DerivedFrom != "" {
 		doc["_id"] = sid + ":" + summary.UsageID
 	}
 	_, err = store.summaries.InsertOne(ctx, doc)
-	if summary.Ready && mongo.IsDuplicateKeyError(err) {
+	if (summary.Ready || summary.DerivedFrom != "") && mongo.IsDuplicateKeyError(err) {
 		var prior struct {
 			Data []byte `bson:"checkpointJson"`
 		}

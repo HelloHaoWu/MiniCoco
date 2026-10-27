@@ -21,8 +21,18 @@ func historyDigest(messages []Message) string {
 }
 func validateSummary(summary Summary, raw []Message) error {
 	if summary.Ready {
-		if summary.PrefixCount == 0 || !validDigest(summary.SourceHash) || !validDigest(summary.ConfigHash) || !strings.HasPrefix(summary.UsageID, "\x00precompact:") || !validSessionID(strings.TrimPrefix(summary.UsageID, "\x00precompact:")) {
+		if summary.DerivedFrom != "" || summary.PrefixCount == 0 || !validDigest(summary.SourceHash) || !validDigest(summary.ConfigHash) || !validComputationID(summary.UsageID, "precompact") {
 			return ErrStoreInvalid
+		}
+	}
+	if summary.DerivedFrom != "" {
+		if summary.PrefixCount == 0 || !validComputationID(summary.DerivedFrom, "precompact") || !validDigest(summary.SourceHash) || !validDigest(summary.ConfigHash) {
+			return ErrStoreInvalid
+		}
+		if summary.UsageID != promotionID(summary) || summary.Usage != (Usage{}) {
+			if !validComputationID(summary.UsageID, "refine") {
+				return ErrStoreInvalid
+			}
 		}
 	}
 	if summary.OriginStartID == "" || summary.OriginEndID == "" || strings.TrimSpace(summary.Content) == "" || !validUsage(summary.Usage) {
@@ -50,16 +60,25 @@ func validateSummary(summary Summary, raw []Message) error {
 	if !boundary || raw[summary.PrefixCount-1]["tool_calls"] != nil {
 		return ErrStoreInvalid
 	}
-	if !summary.Ready && summary.UsageID != "\x00summary:"+historyDigest([]Message{{"hash": summary.PrefixHash, "content": summary.Content}}) {
+	if !summary.Ready && summary.DerivedFrom == "" && summary.UsageID != "\x00summary:"+historyDigest([]Message{{"hash": summary.PrefixHash, "content": summary.Content}}) {
 		return ErrStoreInvalid
 	}
 	return nil
 }
+func validComputationID(id, domain string) bool {
+	prefix := "\x00" + domain + ":"
+	return strings.HasPrefix(id, prefix) && validSessionID(strings.TrimPrefix(id, prefix))
+}
+
+func promotionID(s Summary) string {
+	return "\x00promote:" + historyDigest([]Message{{"from": s.DerivedFrom, "hash": s.PrefixHash, "content": s.Content}})
+}
+
 func activeSummary(summaries []Summary, raw []Message) (*Summary, error) {
 	var active *Summary
 	for i := range summaries {
 		s := &summaries[i]
-		// Speculative candidates must never change Latest, forks or sync compression.
+		// Only formal checkpoints change Latest and forks; candidates need promotion.
 		if s.Ready {
 			continue
 		}

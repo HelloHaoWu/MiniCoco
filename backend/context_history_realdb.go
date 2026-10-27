@@ -13,7 +13,8 @@ func (store *MongoTranscriptStore) Summaries(ctx context.Context, sid string) ([
 	if !validSessionID(sid) {
 		return nil, ErrStoreInvalid
 	}
-	cursor, err := store.summaries.Find(ctx, bson.M{"sessionId": sid}, options.Find().SetSort(bson.D{{Key: "_id", Value: 1}}))
+	// Legacy rows (no orderId) retain _id ordering and precede new checkpoints.
+	cursor, err := store.summaries.Find(ctx, bson.M{"sessionId": sid}, options.Find().SetSort(bson.D{{Key: "orderId", Value: 1}, {Key: "_id", Value: 1}}))
 	if err != nil {
 		return nil, err
 	}

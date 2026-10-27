@@ -1,6 +1,6 @@
 # MiniCoco Agent Harness 仓库约定
 
-最后更新：2026-10-27（Asia/Shanghai）。目标是逐步完善 MiniCoco Agent Harness，保证模型请求、工具执行和会话状态具有明确的成功、失败及取消语义。
+最后更新：2026-10-28（Asia/Shanghai）。目标是逐步完善 MiniCoco Agent Harness，保证模型请求、工具执行和会话状态具有明确的成功、失败及取消语义。
 
 ## 研发与维护规则
 
@@ -23,6 +23,7 @@
 - backend/tools.go：ToolName 注册、固定 read/list/grep/write/edit/run_command/delegate_subagent/memory_write 顺序、兼容最高 Schema 版本与模式过滤；tools/*__vN.json 含最低 Harness 版本 availableVersion，当前内部版本 1，元数据不发给供应商。prompt.go 使用请求模式构建清单，启动时检查全部资源。
 - backend/loop_registry.go：LoopImpl、registerLoop、并发安全选择、LOOP_IMPL 与未知回退；v1 委托现有持久化服务。agentloop.go 的共享入口贯通 SSE/JSON；main.go 启动日志和 health.loop_impl 显示实际选择。loop_registry_test.go 验证分流/取消/回放/配置，prompt_cache_test.go 验证静态 hash、上游字节、历史追加和模拟缓存用量。
 - backend/context_budget.go / compression.go / context_history*.go：v2 估算预算、micro/full 摘要、主动/反应式压缩、进度限制、锁/限流与摘要视图；RawLatest 保留原始幂等/恢复依据，Latest 合并校验后的摘要；源指纹与独立用量账本保证重开和回写恢复。
+- backend/precompact.go / compression_reuse.go：可选后台预压、候选校验与复用、delta 折叠及派生检查点提交；仅 v2 显式启用，默认关闭。候选不直接改变 Latest，正式采用后才影响模型视图。
 - backend/models.go / models.json：内嵌路由表、完整外部替代表、严格配置校验与单轮快照；llm.go 使用路由 provider/baseURL/temperature/thinking。prompts/system_openai.txt 与 system_claude.txt 按 family 选择；工作区仅注入首条 user 环境消息，不写 transcript。
 - backend/toolresult.go：Formatter、NativeFormatter、XmlFormatter、完整批次身份校验、请求顺序、已存格式识别及结果预算；prompt.go 在 MINICOCO_DEBUG_PROMPT=1 时输出完整 messages。toolresult_test.go、client/src/toolresult.test.ts 和真实档专项覆盖两轨落库/恢复/回放。
 - backend/sessions.go：稳定首轮会话、已提交历史、输入/预占、模型调用、final 和元数据回写、成功事件回放；session_http.go 提供列表和恢复元数据。
@@ -67,7 +68,7 @@ Redis 提供 TTL 锁、Lua CAS 解锁、固定窗口限流和 feature_toggle 开
 
 ## 阶段与验证状态
 
-当前研发阶段：Phase 1—9 已验收，Phase 10 Part 1 已完成两档验收；Part 2/3 未实施。最新发布见上层 ChangeLogs/2026-10-27-001-phase10-part1-precompact.md。Part 1 默认关闭，仅产生候选摘要，不复用、不执行 delta，也不改变同步压缩路径。
+当前研发阶段：Phase 1—9 已验收，Phase 10 Part 1/2 已完成两档验收；Part 3 未实施。最新发布见上层 ChangeLogs/2026-10-28-001-phase10-part2-reuse-delta.md。预压及复用仍默认关闭；启用后支持候选精确复用、delta 折叠及同步兜底。真实模型摘要质量与性能收益待 Part 3 验证。
 
 从仓库根目录执行，默认要求 Go ≥ 1.22、Node ≥ 24：
 
@@ -188,7 +189,20 @@ check.sh 与 check_realdb.sh 均通过：默认零依赖、Go -race/vet/构建�
 
 本次 bash check.sh 通过：默认零依赖检查、Go -race/vet/构建（Go 测试缓存命中，覆盖率 83.3%）、TS 类型检查、10 项工具自测及 73 项客户端测试（12 文件）。扩展已有回归验证分片正文、单次/连续输入只输出一次、请求次数不增加，以及默认/v1/v2/未知回退下真实 Go+CLI 输出一次且会话消息数/用量不变。本次未运行可选真实数据库档，未改后端、协议或存储；测试使用临时端口和 mock/模拟上游，未调用真实模型或停止用户后端。
 
-## Phase 10 Part 1 实现与验收（2026-10-27）
+## Phase 10 Part 2 实现与验收（2026-10-28）
+
+- compactContext 在既有锁、选段和 raw/view 映射内只读选择候选；不获取 precompact 锁、不等后台任务。原始 PrefixHash、实际输入 SourceHash、有效模型配置/summaryPrompt 的 ConfigHash、完整 Native/XML 批次及缩减进度均须匹配。忽略损坏、已消费及覆盖超过目标的候选，优先覆盖最长的有效候选。
+- 精确覆盖直接采用已保存正文，摘要模型调用为 0，不占用摘要模型限流额度；较短覆盖只将 previousSummary 与 raw[PrefixCount:count] 发给同模型一次 refineSummary。foldPrompt 要求保留 decisions/paths/unresolved/约束、合并新增信息并去重；输出不超过 8 KiB，消息数与估算 token 都必须下降。
+- 缺失/失配走原 Phase 5 同步摘要；delta 失败、15 秒子超时、超限或无进展时同步兜底一次。父请求取消立即结束；一次摘要限流许可至多用于 delta 加一次同步兜底，既有每请求最多 3 次压缩尝试、锁、限流和安全 trim 保持。存储或账本错误直接报告，不在可能已持久化后重新计算。
+- promote 以追加正式检查点实现：Ready=false、DerivedFrom 指向原候选，原 Ready=true 记录保持不变以恢复已付用量；有效正式引用标记候选已消费。精确复用新 usage 为 0，delta 使用独立 refine 计算 ID；文件及 Mongo 按计算 ID 幂等并拒绝冲突。Mongo 新记录单独保存 orderId，避免计算 ID 的字典序影响等范围正式摘要选择；旧记录仍按原顺序读取。
+- 正式摘要先持久化再去重提交其用量，reconcile 恢复中断记账；候选已知用量亦去重，不改变 RawLatest 或原始 MessageCount。重启/成功轮回放不重复调用模型，分叉仅继承正式视图且不继承父费用。失败或未落盘的模型结果可能产生未记录费用。
+- MINICOCO_PRECOMPACT_RATIO=1 默认关闭新调度及候选复用；已有正式摘要仍生效、候选及账本不删除。实验使用 LOOP_IMPL=v2 MINICOCO_PRECOMPACT_RATIO=0.60。Part 3 质量门未完成，不默认开启；精确命中保证采用已保存内容，不宣称真实模型重算逐字相同。delta 的语义质量、真实缓存命中、延迟/成本及读取优化尚未实测，候选清理和后台崩溃续跑未实现。
+- 本次 check.sh 与 check_realdb.sh 均退出 0：默认零第三方模块/空模块缓存/禁用下载/无 cgo、Go -race/vet/构建、真实驱动包含、TS 类型检查、10 项工具自测、73 项客户端测试（12 文件）通过；Go 覆盖率默认 83.8%、真实档 82.7%。新增 4 项默认 Go 顶层专项及 2 项真实档共享专项，覆盖双传输命中/delta、失配和失败兜底、取消、忙 worker、摘要限流、完整工具批次、已有摘要视图映射、重开/回放/分叉、幂等冲突及账本中断恢复。上游为本机 HTTP 模拟，不调用真实模型。
+- 已检查同步两层 AGENTS、README、.env.example、Phase 10 Part 2 实际适配说明与 ChangeLogs 索引。默认依赖和客户端协议未改；发布详见 ChangeLogs/2026-10-28-001-phase10-part2-reuse-delta.md。根 AGENTS、AgentDocs、ChangeLogs 在仓库之外，仅本地同步。
+
+## Phase 10 Part 1 历史实现与验收（2026-10-27）
+
+以下保留 Part 1 当时的实现边界；当前复用行为以 Part 2 记录为准。
 
 - backend/precompact.go 实现候选预压：仅 v2 新成功轮提交并写出 SSE/JSON 响应后非阻塞调度。v1、失败、取消、成功回放不调度；不保留请求 context/ResponseWriter/可变 trace。后台持有已提交原始历史与视图快照，已有正式摘要按尾段对应关系映射原始序号；临时 trim 或正式视图改变则跳过，完整 Native/XML 工具块边界不变。
 - MINICOCO_PRECOMPACT_RATIO 默认 1（关闭）；实验设为 0.60，在 [0.60,0.80) 预压，可配置 (0,0.80) 内值，1 关闭，非法值启动失败；支持环境优先于 .env。Part 2 复用和 Part 3 质量门尚未完成，当前不默认开放。既有 0.65 micro/0.80 full 阈值不改，micro 可能先缩小视图，预压不是每轮必触发。
