@@ -31,7 +31,7 @@ func registerLoop(key string, impl LoopImpl) error {
 }
 
 func selectedLoop() (string, LoopImpl) {
-	key := getenv("LOOP_IMPL", "v1")
+	key := getenv("LOOP_IMPL", "v2")
 	loopRegistryMu.RLock()
 	defer loopRegistryMu.RUnlock()
 	if impl, ok := loopRegistry[key]; ok {

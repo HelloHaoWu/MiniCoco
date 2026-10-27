@@ -124,7 +124,7 @@ MINICOCO_MODELS_FILE=/absolute/path/models.json LLM_MODEL=my-model LLM_BASE_URL=
 
 #### 实现注册、分流与缓存前缀（Phase 4 Part 2）
 
-`backend/loop_registry.go` 定义统一的 `LoopImpl(context.Context, ChatRequest, emit) error`，保留 HTTP 请求的取消和超时。注册 `v1` 与预算版 `v2`，默认仍为 `v1`，直接进入现有持久化单轮服务；SSE 和 JSON 都在共享入口 `processRequestContext` 中选择一次实现，错误仍走同一分类和结束事件。`LOOP_IMPL` 可通过环境或本地 .env 设置，已导出环境优先；空值/省略选择 v1，未注册名称也按阶段设计回退到 v1。启动日志及 `GET /health` 的 `loop_impl` 显示实际选择，便于发现回退。
+`backend/loop_registry.go` 定义统一的 `LoopImpl(context.Context, ChatRequest, emit) error`，保留 HTTP 请求的取消和超时。注册 `v1` 与预算版 `v2`，默认使用 `v2`，启用上下文预算和压缩；显式 `v1` 可使用基线实现；SSE 和 JSON 都在共享入口 `processRequestContext` 中选择一次实现，错误仍走同一分类和结束事件。`LOOP_IMPL` 可通过环境或本地 .env 设置，已导出环境优先；空值/省略选择 v2，未注册名称仍回退到 v1。启动日志及 `GET /health` 的 `loop_impl` 显示实际选择，便于发现回退。
 
 `registerLoop` 为后端代码扩展点，拒绝空名、空实现和重复注册，读写锁保护注册与选择。生产 v2 已实现 Phase 5 的预算、摘要和压缩重试，由环境切换；无用户哈希分桶，测试假实现使用 test-v2。新增实现必须遵守同一单轮持久化/幂等、取消和完整工具批次提交边界；分流键不进入客户端协议或轮次指纹，既有 v1 成功轮保持回放兼容。实现切换不应改变已经提交的轮次；pending 重试期间保持实现和路由配置稳定，不能将这个钩子理解为自动跨版本数据迁移。
 
@@ -521,7 +521,7 @@ memory_write 属于 full/safe 的写工具，readonly/qa/review 禁止。TTY 询
 
 ### Phase 10：可选后台预压、复用与 eval
 
-后台生成候选摘要，在真正压缩时校验并复用；本地确定性质量 eval 已通过，真实模型质量和收益尚未实测，保持默认关闭。实验运行（从 MiniCoco 目录）：
+后台生成候选摘要，在真正压缩时校验并复用；本地确定性质量 eval 已通过，真实模型质量和收益尚未实测；按用户选择，v2 和 0.60 预压阈值现默认开启。运行（从 MiniCoco 目录）：
 
 ```bash
 LOOP_IMPL=v2 MINICOCO_PRECOMPACT_RATIO=0.60 LLM_PROVIDER=mock bash run_backend.sh
@@ -533,7 +533,7 @@ LOOP_IMPL=v2 MINICOCO_PRECOMPACT_RATIO=0.60 LLM_PROVIDER=mock bash run_backend.s
 
 采用候选会新增正式摘要，以 derived_from 标记来源，保留候选和原有账本；精确复用不新增模型用量，delta 用量独立去重。正式摘要持久化后，重启可恢复视图和中断记账；成功轮重试直接回放。持久化失败会报错，避免已写入后又重新计算。失败或未落盘的模型调用仍可能产生未记录费用。
 
-MINICOCO_PRECOMPACT_RATIO=1（默认）关闭新调度、候选复用及请求内读取快照，重启后端生效；已有正式摘要仍有效，候选和账本保留。可配置值为 (0,0.8) 或 1。复用沿用现有模型和温度；精确命中逐字采用已保存内容，不保证真实模型重新计算逐字相同。未实现候选清理；不应使用旧版后端读取新摘要/轮次格式。
+默认 MINICOCO_PRECOMPACT_RATIO=0.60；显式设为 1 关闭新调度、候选复用及请求内读取快照，重启后端生效；已有正式摘要仍有效，候选和账本保留。可配置值为 (0,0.8) 或 1。复用沿用现有模型和温度；精确命中逐字采用已保存内容，不保证真实模型重新计算逐字相同。未实现候选清理；不应使用旧版后端读取新摘要/轮次格式。
 
 启用优化的 v2 请求在会话锁内复用至多 16 MiB 的读取快照，写入即失效，请求结束即释放；两档存储共用行为，不跨会话/请求缓存。trace 的 sse_done/error 记录 compact_latency_ms（累计同步压缩耗时）、object_reads（成功回源的 transcript 消息对象数）和 prompt_cache_prefix_stable（与上一成功轮的固定前缀+摘要 hash 比较）。首轮/旧记录/回放为 unknown；采用新摘要的轮为 false，摘要未变的后续轮才为 true，memory/环境/约束等前置内容变化也会失效。CLI trace 会展示三项。它们不是供应商缓存命中或真实成本收益；完整口径和本机结果见 [eval 说明](evals/proactive_compaction/README.md)。
 

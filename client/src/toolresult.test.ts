@@ -89,7 +89,7 @@ test('default, v1, v2 and unregistered loop selections print the final answer on
             const running = await backend(binary, dir, 'mock', loop);
             try {
                 const health = await (await fetch(running.url + '/health')).json() as {loop_impl: string};
-                assert.equal(health.loop_impl, loop === 'v2' ? 'v2' : 'v1');
+                assert.equal(health.loop_impl, loop === '' || loop === 'v2' ? 'v2' : 'v1');
                 const result = await cli(['inspect', '--server', running.url, '--workspace', workspace, '--mode', 'readonly']);
                 assert.equal(result.code, 0, result.stderr);
                 assert.equal(result.stdout.match(/Done\. I inspected the workspace and listed its contents above\./g)?.length, 1);

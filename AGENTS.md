@@ -23,7 +23,7 @@
 - backend/tools.go：ToolName 注册、固定 read/list/grep/write/edit/run_command/delegate_subagent/memory_write 顺序、兼容最高 Schema 版本与模式过滤；tools/*__vN.json 含最低 Harness 版本 availableVersion，当前内部版本 1，元数据不发给供应商。prompt.go 使用请求模式构建清单，启动时检查全部资源。
 - backend/loop_registry.go：LoopImpl、registerLoop、并发安全选择、LOOP_IMPL 与未知回退；v1 委托现有持久化服务。agentloop.go 的共享入口贯通 SSE/JSON；main.go 启动日志和 health.loop_impl 显示实际选择。loop_registry_test.go 验证分流/取消/回放/配置，prompt_cache_test.go 验证静态 hash、上游字节、历史追加和模拟缓存用量。
 - backend/context_budget.go / compression.go / context_history*.go：v2 估算预算、micro/full 摘要、主动/反应式压缩、进度限制、锁/限流与摘要视图；RawLatest 保留原始幂等/恢复依据，Latest 合并校验后的摘要；源指纹与独立用量账本保证重开和回写恢复。
-- backend/precompact.go / compression_reuse.go：可选后台预压、候选校验与复用、delta 折叠及派生检查点提交；仅 v2 显式启用，默认关闭。候选不直接改变 Latest，正式采用后才影响模型视图。
+- backend/precompact.go / compression_reuse.go：可选后台预压、候选校验与复用、delta 折叠及派生检查点提交；默认 v2 / 0.60 启用，可显式回退。候选不直接改变 Latest，正式采用后才影响模型视图。
 - backend/context_metrics.go / constraints.go：请求内有界读取快照、写入失效、压缩/存储读取/前缀度量，以及显式配置的固定工作约束；evals/proactive_compaction/ 提供确定性语料、入口和观测报告。
 - backend/models.go / models.json：内嵌路由表、完整外部替代表、严格配置校验与单轮快照；llm.go 使用路由 provider/baseURL/temperature/thinking。prompts/system_openai.txt 与 system_claude.txt 按 family 选择；工作区仅注入首条 user 环境消息，不写 transcript。
 - backend/toolresult.go：Formatter、NativeFormatter、XmlFormatter、完整批次身份校验、请求顺序、已存格式识别及结果预算；prompt.go 在 MINICOCO_DEBUG_PROMPT=1 时输出完整 messages。toolresult_test.go、client/src/toolresult.test.ts 和真实档专项覆盖两轨落库/恢复/回放。
@@ -50,7 +50,7 @@ mode 可选，省略/空串等价 full（八个内建工具及已注册 MCP）�
 
 此处仍只实现结果呈现，未实现 XML 工具调用生成/解析。MINICOCO_DEBUG_PROMPT=1 显式输出完整 messages，可能含私密代码/用户文本，默认关闭。system/tools 在相同 family/mode 下与 workspace 无关，环境消息在 system 之后、历史之前；不表示已验证供应商缓存命中。会话元数据保存首轮模型，显式 --model 只覆盖本次调用，恢复覆盖需再次传入。
 
-LOOP_IMPL 默认/空为 v1，未注册键回退 v1；环境和 .env 支持，环境优先。生产已注册 v1/v2，v2 已实现预算、摘要和压缩重试；测试假实现为 test-v2；无用户分桶或 HTTP 注册接口。注册拒绝空/重复/空实现，读写锁保护；分流键不改变协议或旧轮次指纹，pending 重试保持实现/路由配置稳定，不表示自动数据迁移。缓存诊断 hash=SHA256(system_text+tools_json)，非完整 HTTP 请求或供应商 cache key。相同 family/mode/agentType/slash/Schema（含 MCP 目录） 下，工具 JSON 字节、工作区隔离和历史前缀追加已验收；改 family/mode/Schema 可使 hash 改变。cacheHandle、命中指标持久化和真实命中率/延迟/费用尚未实现或验证。
+LOOP_IMPL 默认/空为 v2，未注册键回退 v1；环境和 .env 支持，环境优先。生产已注册 v1/v2，v2 已实现预算、摘要和压缩重试；测试假实现为 test-v2；无用户分桶或 HTTP 注册接口。注册拒绝空/重复/空实现，读写锁保护；分流键不改变协议或旧轮次指纹，pending 重试保持实现/路由配置稳定，不表示自动数据迁移。缓存诊断 hash=SHA256(system_text+tools_json)，非完整 HTTP 请求或供应商 cache key。相同 family/mode/agentType/slash/Schema（含 MCP 目录） 下，工具 JSON 字节、工作区隔离和历史前缀追加已验收；改 family/mode/Schema 可使 hash 改变。cacheHandle、命中指标持久化和真实命中率/延迟/费用尚未实现或验证。
 
 默认文件档 data/ 相对后端 cwd（启动脚本为 backend/data/），MINICOCO_DATA_DIR 可设绝对路径，每目录仅一个写入实例。JSONL 整文件原子替换，协调器只在进程内生效。部署须持久化数据目录。
 
@@ -69,7 +69,7 @@ Redis 提供 TTL 锁、Lua CAS 解锁、固定窗口限流和 feature_toggle 开
 
 ## 阶段与验证状态
 
-当前研发阶段：Phase 1—10 全部现有 Part 已通过对应本地验收。Phase 10 Part 3 已完成默认及真实数据库档验收，最新发布见上层 ChangeLogs/2026-10-28-002-phase10-part3-metrics-constraints-eval.md。预压、复用及读取快照保持默认关闭；显式启用后提供命中/delta/同步兜底、读取优化及可观测度量。确定性摘要质量 eval 已通过，真实模型语义质量、供应商缓存命中和长期性能收益仍未验证。
+当前研发阶段：Phase 1—10 全部现有 Part 已通过对应本地验收。Phase 10 Part 3 已完成默认及真实数据库档验收，Part 3 发布见上层 ChangeLogs/2026-10-28-002-phase10-part3-metrics-constraints-eval.md；最新默认开启维护见 003 记录。预压、复用及读取快照已按用户要求默认开启（v2 / 0.60）；提供命中/delta/同步兜底、读取优化及可观测度量。确定性摘要质量 eval 已通过，真实模型语义质量、供应商缓存命中和长期性能收益仍未验证。
 
 从仓库根目录执行，默认要求 Go ≥ 1.22、Node ≥ 24：
 
@@ -190,7 +190,15 @@ check.sh 与 check_realdb.sh 均通过：默认零依赖、Go -race/vet/构建�
 
 本次 bash check.sh 通过：默认零依赖检查、Go -race/vet/构建（Go 测试缓存命中，覆盖率 83.3%）、TS 类型检查、10 项工具自测及 73 项客户端测试（12 文件）。扩展已有回归验证分片正文、单次/连续输入只输出一次、请求次数不增加，以及默认/v1/v2/未知回退下真实 Go+CLI 输出一次且会话消息数/用量不变。本次未运行可选真实数据库档，未改后端、协议或存储；测试使用临时端口和 mock/模拟上游，未调用真实模型或停止用户后端。
 
-## Phase 10 Part 3 实现与验收（2026-10-28）
+## 默认启用 Phase 10（2026-10-28）
+
+按用户要求，LOOP_IMPL 默认/空值为 v2，MINICOCO_PRECOMPACT_RATIO 默认/空值为 0.60；新启动后端默认支持预算压缩、后台预压、候选复用及请求读取快照。显式 ratio=1 关闭 Phase 10 优化，显式 v1 回退不自动压缩的基线；未知循环键仍回退 v1。已有环境/.env 的显式配置优先，本次不修改用户 .env、不重启运行中的服务。v2 成功后统一发送单轮正文，非逐 token 输出。验收及发布见 ChangeLogs/2026-10-28-003-phase10-default-on.md。
+
+本次默认 check.sh 最终通过：默认零依赖、Go -race/vet/构建（覆盖率 84.1%，最终复跑命中缓存）、TS 类型检查、10 项工具自测和 73 项客户端测试（12 文件）。增加临时测试后端启动失败的 stderr/退出码诊断；前两次全量各一次就绪失败，诊断版 21 项相关回归及最终全量通过。本次未重跑真实数据库档，未调用真实模型。
+
+## Phase 10 Part 3 历史实现与验收（2026-10-28）
+
+以下保留该 Part 当时默认关闭的状态，当前默认值以上方维护记录为准。
 
 - context_metrics.go 提供三项终端 trace 度量（sse_done/error）：compact_latency_ms 为所有同步压缩尝试累计耗时（含锁/存储/模型等待，排除 idle 预压）；object_reads 为本请求成功从存储读取的 transcript 消息对象累计数（含 pending/final，重复回源重复计数，不含摘要/元数据/Redis/后台）；prompt_cache_prefix_stable 比较当前与上一成功轮的固定消息+tools+摘要锚点诊断 hash。首轮/旧无 hash/回放为 unknown；采用新摘要为 false，后续锚点未变才为 true；不能当供应商缓存命中率。
 - 固定前缀诊断包含主 system、动态 memory、固定约束、环境、tools、摘要和模型/端点身份。成功轮原子保存 PromptPrefixHash，重开可比较；失败不推进参照轮，回放无新 prompt 度量。客户端 trace 校验并显示三项，旧 trace 兼容。摘要/权限正文不写 trace。

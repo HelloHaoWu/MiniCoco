@@ -28,8 +28,12 @@ func TestLoopSelectionAndRegistration(t *testing.T) {
 	for _, key := range []string{"", "v1", "not-registered"} {
 		t.Setenv("LOOP_IMPL", key)
 		selected, _ := selectedLoop()
-		if selected != "v1" {
-			t.Fatal("missing/unknown selection must fall back to v1")
+		want := "v1"
+		if key == "" {
+			want = "v2"
+		}
+		if selected != want {
+			t.Fatal("empty defaults to v2; explicit v1 and unknown keys use v1")
 		}
 		response, events := deltaResponse(t, map[string]any{"roundId": "baseline", "query": "inspect", "stream": false})
 		requireRoundFinish(t, response, events, FinishToolCalls)

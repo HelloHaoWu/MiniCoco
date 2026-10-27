@@ -408,8 +408,11 @@ func TestPrecompactConfig(t *testing.T) {
 		if (err == nil) != valid {
 			t.Fatal(value, ratio, err)
 		}
-		if value == "" && ratio != 1 {
-			t.Fatal("default enabled before quality gate")
+		if value == "" && ratio != preCompactRatio {
+			t.Fatal("default must enable precompression at 0.60")
+		}
+		if value == "1" && ratio != 1 {
+			t.Fatal("explicit rollback must disable precompression")
 		}
 	}
 	route := ModelRoute{Name: "one", Provider: "mock", Temperature: 0.7}

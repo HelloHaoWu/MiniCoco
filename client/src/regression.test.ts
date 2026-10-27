@@ -227,7 +227,9 @@ test('Go proxy and real CLI complete read → edit → command → final respons
     }, async upstream => {
         const reservation = http.createServer(); reservation.listen(0, '127.0.0.1'); await once(reservation, 'listening');
         const port = (reservation.address() as import('node:net').AddressInfo).port; await new Promise<void>(resolve => reservation.close(() => resolve()));
-        const child = spawn(binary, [], {cwd: temp, env: {...process.env, STORE_BACKEND: 'file', MINICOCO_MODEL_IS_FUNCTION_CALL: '', MINICOCO_MODELS_FILE: '', MINICOCO_DEBUG_PROMPT: '0', MINICOCO_DATA_DIR: path.join(temp, 'data'), LLM_PROVIDER: 'openai', LLM_BASE_URL: upstream, LLM_API_KEY: 'fake-test-key', LLM_MODEL: 'deepseek-flash', MINICOCO_HOST: '127.0.0.1', MINICOCO_PORT: String(port)}, stdio: 'ignore'});
+        const child = spawn(binary, [], {cwd: temp, env: {...process.env, STORE_BACKEND: 'file', MINICOCO_MODEL_IS_FUNCTION_CALL: '', MINICOCO_MODELS_FILE: '', MINICOCO_DEBUG_PROMPT: '0', MINICOCO_DATA_DIR: path.join(temp, 'data'), LLM_PROVIDER: 'openai', LLM_BASE_URL: upstream, LLM_API_KEY: 'fake-test-key', LLM_MODEL: 'deepseek-flash', MINICOCO_HOST: '127.0.0.1', MINICOCO_PORT: String(port)}, stdio: ['ignore', 'ignore', 'pipe']});
+        let backendError = '';
+        child.stderr?.on('data', chunk => {backendError += chunk;});
         const exit = once(child, 'exit');
         try {
             let ready = false;
@@ -235,7 +237,7 @@ test('Go proxy and real CLI complete read → edit → command → final respons
                 try {if ((await fetch(`http://127.0.0.1:${port}/health`)).ok) {ready = true;break;}} catch {}
                 await new Promise(resolve => setTimeout(resolve, 20));
             }
-            assert(ready, 'backend did not start');
+            assert(ready, `backend did not start (exit=${child.exitCode}): ${backendError}`);
             const result = await cli(['fix calc', '--workspace', ws, '--server', `http://127.0.0.1:${port}`]);
             assert.equal(result.code, 0, result.stderr); assert.match(result.stdout, /fixed and tests passed/);
             assert.match(fs.readFileSync(path.join(ws, 'calc.mjs'), 'utf8'), /a \+ b/);
@@ -251,7 +253,9 @@ test('Go flaky backend and real CLI recover with default cancellable backoff', {
     assert.equal(build.status, 0, build.stderr);
     const reservation = http.createServer();reservation.listen(0, '127.0.0.1');await once(reservation, 'listening');
     const port = (reservation.address() as import('node:net').AddressInfo).port;await new Promise<void>(resolve => reservation.close(() => resolve()));
-    const child = spawn(binary, [], {cwd: temp, env: {...process.env, STORE_BACKEND: 'file', MINICOCO_MODEL_IS_FUNCTION_CALL: '', MINICOCO_MODELS_FILE: '', MINICOCO_DEBUG_PROMPT: '0', MINICOCO_DATA_DIR: path.join(temp, 'data'), LLM_PROVIDER: 'mock', LLM_API_KEY: '', LLM_MOCK_MODE: 'flaky', LLM_MOCK_FLAKY_FAILS: '2', MINICOCO_HOST: '127.0.0.1', MINICOCO_PORT: String(port)}, stdio: 'ignore'});
+    const child = spawn(binary, [], {cwd: temp, env: {...process.env, STORE_BACKEND: 'file', MINICOCO_MODEL_IS_FUNCTION_CALL: '', MINICOCO_MODELS_FILE: '', MINICOCO_DEBUG_PROMPT: '0', MINICOCO_DATA_DIR: path.join(temp, 'data'), LLM_PROVIDER: 'mock', LLM_API_KEY: '', LLM_MOCK_MODE: 'flaky', LLM_MOCK_FLAKY_FAILS: '2', MINICOCO_HOST: '127.0.0.1', MINICOCO_PORT: String(port)}, stdio: ['ignore', 'ignore', 'pipe']});
+    let backendError = '';
+    child.stderr?.on('data', chunk => {backendError += chunk;});
     const exit = once(child, 'exit');
     try {
         let ready = false;
@@ -259,7 +263,7 @@ test('Go flaky backend and real CLI recover with default cancellable backoff', {
             try {if ((await fetch(`http://127.0.0.1:${port}/health`)).ok) {ready = true;break;}} catch {}
             await new Promise(resolve => setTimeout(resolve, 20));
         }
-        assert(ready);
+        assert(ready, `backend did not start (exit=${child.exitCode}): ${backendError}`);
         const result = await cli(['inspect workspace', '--workspace', ws, '--server', `http://127.0.0.1:${port}`]);
         assert.equal(result.code, 0, result.stderr);assert.match(result.stdout, /Done\. I inspected/);
         assert.equal(result.stderr.match(/\[retry\]/g)?.length, 2);
@@ -273,7 +277,9 @@ test('Go flaky backend recovers through one real JSON fallback and executes a to
     assert.equal(build.status, 0, build.stderr);
     const reservation = http.createServer();reservation.listen(0, '127.0.0.1');await once(reservation, 'listening');
     const port = (reservation.address() as import('node:net').AddressInfo).port;await new Promise<void>(resolve => reservation.close(() => resolve()));
-    const child = spawn(binary, [], {cwd: temp, env: {...process.env, STORE_BACKEND: 'file', MINICOCO_MODEL_IS_FUNCTION_CALL: '', MINICOCO_MODELS_FILE: '', MINICOCO_DEBUG_PROMPT: '0', MINICOCO_DATA_DIR: path.join(temp, 'data'), LLM_PROVIDER: 'mock', LLM_API_KEY: '', LLM_MOCK_MODE: 'flaky', LLM_MOCK_FLAKY_FAILS: '2', MINICOCO_HOST: '127.0.0.1', MINICOCO_PORT: String(port)}, stdio: 'ignore'});
+    const child = spawn(binary, [], {cwd: temp, env: {...process.env, STORE_BACKEND: 'file', MINICOCO_MODEL_IS_FUNCTION_CALL: '', MINICOCO_MODELS_FILE: '', MINICOCO_DEBUG_PROMPT: '0', MINICOCO_DATA_DIR: path.join(temp, 'data'), LLM_PROVIDER: 'mock', LLM_API_KEY: '', LLM_MOCK_MODE: 'flaky', LLM_MOCK_FLAKY_FAILS: '2', MINICOCO_HOST: '127.0.0.1', MINICOCO_PORT: String(port)}, stdio: ['ignore', 'ignore', 'pipe']});
+    let backendError = '';
+    child.stderr?.on('data', chunk => {backendError += chunk;});
     const exit = once(child, 'exit');let fallbacks = 0;
     try {
         let ready = false;
@@ -281,7 +287,7 @@ test('Go flaky backend recovers through one real JSON fallback and executes a to
             try {if ((await fetch(`http://127.0.0.1:${port}/health`)).ok) {ready = true;break;}} catch {}
             await new Promise(resolve => setTimeout(resolve, 20));
         }
-        assert(ready);
+        assert(ready, `backend did not start (exit=${child.exitCode}): ${backendError}`);
         const convo = new Conversation(`http://127.0.0.1:${port}`, ws, '', 25, {approvalMode: 'yes',
             retryPolicy: {...RETRY_POLICY, maxRetries: 1, baseMs: 0, capMs: 0, jitter: 0},
             retryDependencies: {onRetry: () => {}, runNonStreaming: async (input, signal) => {

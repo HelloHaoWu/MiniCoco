@@ -20,4 +20,4 @@ object_reads 计数实际成功读取的 transcript 消息对象：文件档包�
 
 prompt_cache_prefix_stable 比较当前请求与上一成功轮的“固定消息+tools+摘要锚点”诊断 hash，包含位于摘要前的 memory、environment、固定约束，以及模型/端点身份。新会话、旧记录无 hash、成功回放显示 unknown；新摘要采用/替换为 false，锚点不变的追加轮才为 true。没有摘要时只比较固定前缀。该值不是供应商缓存命中率或费用证明；没有测量真实 cache invalidation 频率下降。
 
-默认 MINICOCO_PRECOMPACT_RATIO=1 仍关闭调度、复用和读取快照；显式 v2 + 0.60 可启用已经过本地 eval 的功能。未增加快模型，未调用真实模型质量评估；真实部署扩大启用前仍需用目标模型验证语义和成本。约束配置见产品 README。
+默认 LOOP_IMPL=v2、MINICOCO_PRECOMPACT_RATIO=0.60，启用已通过本地 eval 的调度、复用及读取快照；显式 ratio=1 可关闭这三项，显式 v1 可回退基线。未增加快模型，未调用真实模型质量评估；真实部署扩大启用前仍需用目标模型验证语义和成本。约束配置见产品 README。
