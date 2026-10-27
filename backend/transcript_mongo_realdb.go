@@ -274,7 +274,23 @@ func (store *MongoTranscriptStore) SaveSummary(ctx context.Context, sid string, 
 	if err != nil {
 		return err
 	}
-	_, err = store.summaries.InsertOne(ctx, bson.M{"checkpointJson": data, "sessionId": sid, "originStartId": summary.OriginStartID, "originEndId": summary.OriginEndID, "content": summary.Content, "ts": time.Now().UnixMilli()})
+	doc := bson.M{"checkpointJson": data, "sessionId": sid, "originStartId": summary.OriginStartID, "originEndId": summary.OriginEndID, "content": summary.Content, "ts": time.Now().UnixMilli()}
+	if summary.Ready {
+		doc["_id"] = sid + ":" + summary.UsageID
+	}
+	_, err = store.summaries.InsertOne(ctx, doc)
+	if summary.Ready && mongo.IsDuplicateKeyError(err) {
+		var prior struct {
+			Data []byte `bson:"checkpointJson"`
+		}
+		if err := store.summaries.FindOne(ctx, bson.M{"_id": doc["_id"]}).Decode(&prior); err != nil {
+			return err
+		}
+		if string(prior.Data) == string(data) {
+			return nil
+		}
+		return ErrStoreConflict
+	}
 	return err
 }
 

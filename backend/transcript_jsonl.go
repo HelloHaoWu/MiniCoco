@@ -312,6 +312,15 @@ func (store *JSONLTranscriptStore) SaveSummary(ctx context.Context, sid string, 
 		if len(line) > 0 && !json.Valid(line) {
 			return fmt.Errorf("%w: corrupt summary log", ErrStoreInvalid)
 		}
+		if summary.Ready && len(line) > 0 {
+			var prior Summary
+			if json.Unmarshal(line, &prior) == nil && prior.UsageID == summary.UsageID {
+				if prior == summary {
+					return nil
+				}
+				return ErrStoreConflict
+			}
+		}
 	}
 	if len(old) > 0 && old[len(old)-1] != '\n' {
 		return fmt.Errorf("%w: incomplete summary line", ErrStoreInvalid)

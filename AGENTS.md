@@ -1,6 +1,6 @@
 # MiniCoco Agent Harness 仓库约定
 
-最后更新：2026-10-26（Asia/Shanghai）。目标是逐步完善 MiniCoco Agent Harness，保证模型请求、工具执行和会话状态具有明确的成功、失败及取消语义。
+最后更新：2026-10-27（Asia/Shanghai）。目标是逐步完善 MiniCoco Agent Harness，保证模型请求、工具执行和会话状态具有明确的成功、失败及取消语义。
 
 ## 研发与维护规则
 
@@ -67,7 +67,7 @@ Redis 提供 TTL 锁、Lua CAS 解锁、固定窗口限流和 feature_toggle 开
 
 ## 阶段与验证状态
 
-当前研发阶段：Phase 1—9 的全部现有 Part 已验收；当前路线实现结束。各 Part 验证和边界见末尾记录，发布见上层 ChangeLogs；最新维护为 CLI 正文重复显示修复（016）。
+当前研发阶段：Phase 1—9 已验收，Phase 10 Part 1 已完成两档验收；Part 2/3 未实施。最新发布见上层 ChangeLogs/2026-10-27-001-phase10-part1-precompact.md。Part 1 默认关闭，仅产生候选摘要，不复用、不执行 delta，也不改变同步压缩路径。
 
 从仓库根目录执行，默认要求 Go ≥ 1.22、Node ≥ 24：
 
@@ -100,7 +100,7 @@ MINICOCO_TEST_MONGO_URI=mongodb://127.0.0.1:27017 MINICOCO_TEST_REDIS_URL=redis:
 
 Part 1 已验收并推送 d3c0f5d，见 ChangeLog 004。Part 2 本次两档完整验收通过：默认零依赖、空模块缓存/禁用下载/无 cgo、Go -race/vet/构建、TS 类型检查、10 项工具自测及 52 项客户端测试（6 文件）通过，Go 覆盖率 84.6%；真实档 -race/vet/无 cgo/驱动包含检查通过，覆盖率 83.1%。新增 6 项默认 Go 顶层压缩专项（含子用例）、真实档共享压缩持久化/重开/摘要用量恢复专项、1 项长会话真实 CLI 重启恢复测试。临时独立端口 MongoDB/Redis 已停止；未调用真实模型 API。Part 2 发布见 ChangeLog 2026-10-26-005。
 
-当前资料 Phase 1—9 共 30 个 Markdown 文件；各 Part 的当前状态以阶段表和最新验收记录为准。未实现 OS 沙箱、跨进程工具日志/副作用 exactly-once、XML 工具调用解析、原生 Anthropic 协议或真实缓存收益验证。摘要是有损视图，语义质量尚无真实模型实测；默认文件档仍整文件重写，长期原始日志与摘要文件会增长，当前无物理日志清理。1 MiB/512 条限制应用于模型视图，已有工具结果/请求大小限制不变。
+该次历史验收时资料为 Phase 1—9 共 30 个 Markdown 文件；各 Part 的当前状态以阶段表和最新验收记录为准。未实现 OS 沙箱、跨进程工具日志/副作用 exactly-once、XML 工具调用解析、原生 Anthropic 协议或真实缓存收益验证。摘要是有损视图，语义质量尚无真实模型实测；默认文件档仍整文件重写，长期原始日志与摘要文件会增长，当前无物理日志清理。1 MiB/512 条限制应用于模型视图，已有工具结果/请求大小限制不变。
 
 ## Phase 6 Part 1 历史验收（2026-10-26）
 
@@ -172,7 +172,7 @@ check.sh 与 check_realdb.sh 均通过：默认零依赖、Go -race/vet/构建�
 
 最多 8 服务/64 工具、64 KiB 配置及目录、单行 1 MiB、30 秒 RPC；输出限额和进程退出清理有界。MCP 调用不自动重试，取消通知不保证外部副作用停止。readOnly 是用户对服务的声明，服务启动本身可执行代码，无 OS 沙箱；explore 不继承 MCP。仅 stdio，不实现 HTTP、目录动态刷新或服务端主动采样。未调用真实模型 API。Part 1 已推送 d2ff728，本 Part 发布见 ChangeLog 014；下一步 Part 3 工作区记忆。
 
-## 最新进度：Phase 9 完成（2026-10-26）
+## Phase 9 历史验收（2026-10-26）
 
 Phase 9 Part 3：memory_write 与 --remember，在客户端 workspace/data/memory 保存 frontmatter 条目和 MEMORY.md 索引，同名更新、operation=delete 删除。索引每行 150 Unicode 字符/总 16 KiB，正文 64 KiB，文件名来自 name 的稳定哈希；文件路径检查、原子替换和 0600 文件权限。主 system 追加阶段 memory.txt 原文，独立第二条 system-reminder 逐字包含索引（空为 empty），正文仅按需 read_file。新轮刷新 memoryIndex，重试固定快照，Go 纳入指纹与 v2 固定预算；无效索引明确提示并省略，避免已执行工具结果丢失。
 
@@ -187,3 +187,13 @@ check.sh 与 check_realdb.sh 均通过：默认零依赖、Go -race/vet/构建�
 修复 CLI 完成时重复显示正文：executor 已渲染 SSE/JSON 文本事件，cli.ts 在 completed 后仅输出换行，不再输出 === answer === 和 result.text。Conversation 返回的完整 text、子 Agent quiet 返回、工具循环、模型请求和持久化不变；thinking 与 text 的事件区分未改。客户端源码直接由 Node 加载，退出旧客户端并重新启动即可生效，后端无需重启。
 
 本次 bash check.sh 通过：默认零依赖检查、Go -race/vet/构建（Go 测试缓存命中，覆盖率 83.3%）、TS 类型检查、10 项工具自测及 73 项客户端测试（12 文件）。扩展已有回归验证分片正文、单次/连续输入只输出一次、请求次数不增加，以及默认/v1/v2/未知回退下真实 Go+CLI 输出一次且会话消息数/用量不变。本次未运行可选真实数据库档，未改后端、协议或存储；测试使用临时端口和 mock/模拟上游，未调用真实模型或停止用户后端。
+
+## Phase 10 Part 1 实现与验收（2026-10-27）
+
+- backend/precompact.go 实现候选预压：仅 v2 新成功轮提交并写出 SSE/JSON 响应后非阻塞调度。v1、失败、取消、成功回放不调度；不保留请求 context/ResponseWriter/可变 trace。后台持有已提交原始历史与视图快照，已有正式摘要按尾段对应关系映射原始序号；临时 trim 或正式视图改变则跳过，完整 Native/XML 工具块边界不变。
+- MINICOCO_PRECOMPACT_RATIO 默认 1（关闭）；实验设为 0.60，在 [0.60,0.80) 预压，可配置 (0,0.80) 内值，1 关闭，非法值启动失败；支持环境优先于 .env。Part 2 复用和 Part 3 质量门尚未完成，当前不默认开放。既有 0.65 micro/0.80 full 阈值不改，micro 可能先缩小视图，预压不是每轮必触发。
+- 每进程最多 2 个在飞，无等待队列；每会话本机去重和 Coordinator precompact 租约（2 分钟），rate:precompact 每会话 1 次/30 秒。后台独立 60 秒超时，小于锁 TTL；服务关闭取消并等待 worker 收尾，再关闭日志和存储。panic/模型/存储失败隔离；不获取会话或同步 summary 锁，主流程不等待预压完成。共享 Redis 时租约/限流跨进程，并发上限仍按进程。
+- Summary 增加 Ready、SourceHash、ConfigHash。Ready=true 只表示候选，activeSummary/Latest/同步压缩/fork 均不使用。PrefixCount/PrefixHash 仍对应完整原始前缀；SourceHash 是实际摘要输入视图指纹，ConfigHash 覆盖有效路由、模型名、现有摘要提示词。仅原始前缀 hash 一致不足以判定将来复用有效；Part 2 必须同时验证来源、配置和完整批次边界。
+- 复用 Phase 5 的同一个 summarize 函数，提取 summaryPrompt 常量但不改原文和路由温度。没有引入快模型或强制 temperature=0；真实模型不承诺逐字确定。默认与真实档均保存候选字段，同一个计算 UsageID 重复保存幂等，冲突拒绝。不同模型调用使用独立内部 precompact 用量 ID；候选保存后记账，reconcile 补齐中断的元数据写入，候选未被采用也计入已知 usage，不改变原始消息数。失败或未落盘的供应商请求仍可能产生未记录费用。
+- 验收：默认 check.sh 和可选 check_realdb.sh 全部通过（默认零第三方模块、Go -race/vet/构建、真实档驱动包含和无 cgo、TS 类型检查、10 项工具自测、73 项客户端测试/12 文件）；新增 Go 专项覆盖候选隔离/重开/用量恢复/幂等冲突、窗口/限流/共享租约/并发上限、错误/panic/超时/关闭、双传输/回放/v1、不完整及已摘要历史边界、分叉隔离、模拟真实上游的参数与 usage。最后追加的 Go 两档回归结果见本批 ChangeLog。
+- 当前只预计算，尚未实现 promote、命中复用、delta、Part 3 eval/指标或对象读取优化；候选不是自动压缩成果，不承诺首轮提速或缓存命中改善。关闭配置只停止新调度，不删除候选/账本；没有候选清理、后台任务崩溃恢复或旧二进制读取新候选的兼容保证。无真实模型调用、真实缓存或语义质量实测。本 Part 未修改客户端协议、默认依赖或用户本地 .env；两层 AGENTS 已检查同步。

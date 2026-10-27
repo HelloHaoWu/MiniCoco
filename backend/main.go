@@ -41,7 +41,10 @@ func main() {
 	if _, err := routeFor(""); err != nil {
 		log.Fatal(err)
 	}
-	var err error
+	preRatio, err := precompactRatioFromEnv()
+	if err != nil {
+		log.Fatal(err)
+	}
 	var closeStores func()
 	startup, stopStartup := context.WithTimeout(context.Background(), 15*time.Second)
 	activeSessions, closeStores, err = wireStores(startup, getenv("MINICOCO_DATA_DIR", "data"))
@@ -79,6 +82,8 @@ func main() {
 	server := &http.Server{Addr: addr, ReadHeaderTimeout: 5 * time.Second, ReadTimeout: 15 * time.Second, IdleTimeout: 60 * time.Second}
 	stopping, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
+	activeSessions.precompact = newPrecompactWorker(stopping, activeSessions, preRatio)
+	defer activeSessions.precompact.close()
 	server.BaseContext = func(_ net.Listener) context.Context { return stopping }
 	errors := make(chan error, 1)
 	go func() { errors <- server.ListenAndServe() }()
@@ -145,6 +150,15 @@ func handleChatStream(w http.ResponseWriter, r *http.Request) {
 	}
 	ctx, cancel := context.WithTimeout(r.Context(), 125*time.Second)
 	defer cancel()
+	after := &precompactAfter{}
+	ctx = context.WithValue(ctx, precompactAfterKey{}, after)
+	// Both transports have written their response before this nonblocking dispatch.
+	// Never schedule replay, failed, cancelled or v1 rounds.
+	defer func() {
+		if ctx.Err() == nil && after.job != nil {
+			activeSessions.precompact.submit(*after.job)
+		}
+	}()
 	if err := activeSessions.resolve(ctx, &req); err != nil {
 		writeSessionError(w, err)
 		return

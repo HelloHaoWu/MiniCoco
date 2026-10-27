@@ -20,6 +20,11 @@ func historyDigest(messages []Message) string {
 	return hex.EncodeToString(hash[:])
 }
 func validateSummary(summary Summary, raw []Message) error {
+	if summary.Ready {
+		if summary.PrefixCount == 0 || !validDigest(summary.SourceHash) || !validDigest(summary.ConfigHash) || !strings.HasPrefix(summary.UsageID, "\x00precompact:") || !validSessionID(strings.TrimPrefix(summary.UsageID, "\x00precompact:")) {
+			return ErrStoreInvalid
+		}
+	}
 	if summary.OriginStartID == "" || summary.OriginEndID == "" || strings.TrimSpace(summary.Content) == "" || !validUsage(summary.Usage) {
 		return ErrStoreInvalid
 	}
@@ -45,7 +50,7 @@ func validateSummary(summary Summary, raw []Message) error {
 	if !boundary || raw[summary.PrefixCount-1]["tool_calls"] != nil {
 		return ErrStoreInvalid
 	}
-	if summary.UsageID != "\x00summary:"+historyDigest([]Message{{"hash": summary.PrefixHash, "content": summary.Content}}) {
+	if !summary.Ready && summary.UsageID != "\x00summary:"+historyDigest([]Message{{"hash": summary.PrefixHash, "content": summary.Content}}) {
 		return ErrStoreInvalid
 	}
 	return nil
@@ -54,6 +59,10 @@ func activeSummary(summaries []Summary, raw []Message) (*Summary, error) {
 	var active *Summary
 	for i := range summaries {
 		s := &summaries[i]
+		// Speculative candidates must never change Latest, forks or sync compression.
+		if s.Ready {
+			continue
+		}
 		if err := validateSummary(*s, raw); err != nil {
 			return nil, err
 		}
@@ -64,6 +73,11 @@ func activeSummary(summaries []Summary, raw []Message) (*Summary, error) {
 		}
 	}
 	return active, nil
+}
+
+func validDigest(value string) bool {
+	decoded, err := hex.DecodeString(value)
+	return err == nil && len(decoded) == sha256.Size
 }
 func summaryMessages(content string) []Message {
 	return []Message{{"role": "user", "content": "Continue using the saved context."}, {"role": "assistant", "content": "[Context summary]\n" + content}}

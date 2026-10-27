@@ -36,6 +36,9 @@ type Usage struct {
 // the store-specific physical IDs. PrefixHash validates the exact source range.
 // Old summaries without these fields remain saved-only records.
 type Summary struct {
+	Ready         bool   `json:"ready,omitempty"`
+	SourceHash    string `json:"source_hash,omitempty"`
+	ConfigHash    string `json:"config_hash,omitempty"`
 	OriginStartID string `json:"origin_start_id"`
 	OriginEndID   string `json:"origin_end_id"`
 	Content       string `json:"content"`

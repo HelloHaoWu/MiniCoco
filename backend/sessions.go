@@ -15,6 +15,7 @@ const maxHistoryMessages = 512
 const maxToolOutputBytes = 64 * 1024
 
 type sessionService struct {
+	precompact *precompactWorker
 	trace      func(TraceRecord)
 	traceDir   string
 	sink       *jsonlSink
@@ -175,6 +176,9 @@ func (service *sessionService) reconcile(ctx context.Context, sid string) error 
 		return err
 	}
 	for _, summary := range summaries {
+		if summary.Ready && validateSummary(summary, raw) != nil {
+			continue // Invalid optional candidates cannot poison normal requests.
+		}
 		if summary.UsageID != "" {
 			if err := service.meta.CommitRoundUsage(ctx, sid, summary.UsageID, summary.Usage, summary.PrefixCount); err != nil {
 				return err
@@ -418,6 +422,14 @@ func (service *sessionService) process(ctx context.Context, req ChatRequest, emi
 		}
 		if v2 || (event.Type != EvText && event.Type != EvReasoning) {
 			emit(event)
+		}
+	}
+	if v2 && ctx.Err() == nil && service.precompact != nil && service.precompact.ratio != 1 {
+		if after, ok := ctx.Value(precompactAfterKey{}).(*precompactAfter); ok {
+			if snapshot, err := effectiveRoute(route); err == nil {
+				after.job = &precompactJob{sid: req.SessionID, workspace: req.Workspace, mode: mode, route: snapshot,
+					view: next, raw: append(append(append([]Message(nil), rawHistory...), input...), reply)}
+			}
 		}
 	}
 	return nil
