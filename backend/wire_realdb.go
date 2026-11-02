@@ -5,7 +5,6 @@ package main
 import (
 	"context"
 	"fmt"
-	"path/filepath"
 	"regexp"
 	"time"
 
@@ -18,7 +17,7 @@ func wireRealStores(ctx context.Context, dir string) (*sessionService, func(), e
 	if !regexp.MustCompile(`^[A-Za-z0-9_-]{1,64}$`).MatchString(databaseName) {
 		return nil, nil, fmt.Errorf("invalid MONGO_DATABASE")
 	}
-	meta, err := NewSQLiteMetaStore(ctx, filepath.Join(dir, "meta.sqlite"))
+	meta, err := NewPostgresMetaStore(ctx, getenv("POSTGRES_URL", ""))
 	if err != nil {
 		return nil, nil, err
 	}

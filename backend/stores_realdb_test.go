@@ -6,14 +6,15 @@ import (
 	"bufio"
 	"bytes"
 	"context"
+	"database/sql"
 	"encoding/json"
 	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"os"
 	"os/exec"
-	"path/filepath"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -27,6 +28,8 @@ import (
 
 func realContractFactory(t *testing.T) func() contractStores {
 	t.Helper()
+	pgURI := postgresTestURL(t)
+	t.Setenv("POSTGRES_URL", pgURI)
 	mongoURI, redisURL := os.Getenv("MINICOCO_TEST_MONGO_URI"), os.Getenv("MINICOCO_TEST_REDIS_URL")
 	if mongoURI == "" || redisURL == "" {
 		t.Skip("real service tests require MINICOCO_TEST_MONGO_URI and MINICOCO_TEST_REDIS_URL; check_realdb.sh requires both")
@@ -47,7 +50,6 @@ func realContractFactory(t *testing.T) func() contractStores {
 	}
 	database := client.Database(token)
 	prefix := token + ":"
-	path := filepath.Join(t.TempDir(), "meta.sqlite")
 	t.Cleanup(func() {
 		cleanup, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer cancel()
@@ -65,7 +67,7 @@ func realContractFactory(t *testing.T) func() contractStores {
 	return func() contractStores {
 		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 		defer cancel()
-		meta, err := NewSQLiteMetaStore(ctx, path)
+		meta, err := NewPostgresMetaStore(ctx, pgURI)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -84,7 +86,7 @@ func realContractFactory(t *testing.T) func() contractStores {
 }
 func TestRealStoreContract(t *testing.T) { runStoreContract(t, realContractFactory) }
 
-func TestRealSQLiteSharedLedger(t *testing.T) {
+func TestRealPostgresSharedLedger(t *testing.T) {
 	open := realContractFactory(t)
 	one, two := open(), open()
 	defer one.close()
@@ -111,13 +113,13 @@ func TestRealSQLiteSharedLedger(t *testing.T) {
 	workers.Wait()
 	got, err := two.meta.GetSession(ctx, id)
 	if err != nil || got.TotalTokens != 5 || got.MessageCount != 2 {
-		t.Fatalf("shared SQLite ledger: %#v, %v", got, err)
+		t.Fatalf("shared Postgres ledger: %#v, %v", got, err)
 	}
 	if err := two.meta.SetLike(ctx, id+".m_reply", -1); err != nil {
 		t.Fatal(err)
 	}
 	var like int
-	if err := one.meta.(*SQLiteMetaStore).db.QueryRowContext(ctx, `SELECT like_status FROM msg_index WHERE msg_id=?`, id+".m_reply").Scan(&like); err != nil || like != -1 {
+	if err := one.meta.(*PostgresMetaStore).db.QueryRowContext(ctx, `SELECT like_status FROM msg_index WHERE msg_id=$1`, id+".m_reply").Scan(&like); err != nil || like != -1 {
 		t.Fatalf("SQL message index: %d %v", like, err)
 	}
 }
@@ -253,6 +255,9 @@ func TestRealRedisFlagsAndInbox(t *testing.T) {
 }
 
 func TestRealSSEInboxDelivery(t *testing.T) {
+	// This fixture deliberately never finishes the upstream round. It tests
+	// live inbox transport; v2 buffers its model events until a successful commit.
+	t.Setenv("LOOP_IMPL", "v1")
 	stores := realContractFactory(t)()
 	defer stores.close()
 	previous := activeSessions
@@ -628,3 +633,42 @@ func TestRealSubagentPersistence(t *testing.T) { runSubagentPersistence(t, realC
 func TestRealBackgroundPersistence(t *testing.T) { runBackgroundPersistence(t, realContractFactory) }
 
 func TestRealForkPersistence(t *testing.T) { runForkPersistence(t, realContractFactory) }
+
+// Each test owns a random schema; only that schema is removed at cleanup.
+func postgresTestURL(t *testing.T) string {
+	t.Helper()
+	raw := os.Getenv("MINICOCO_TEST_POSTGRES_URL")
+	if raw == "" {
+		t.Skip("requires MINICOCO_TEST_POSTGRES_URL; check_realdb.sh requires all three services")
+	}
+	u, err := url.Parse(raw)
+	if err != nil || (u.Scheme != "postgres" && u.Scheme != "postgresql") {
+		t.Fatal("test PostgreSQL URL is invalid")
+	}
+	db, err := sql.Open("pgx", raw)
+	if err != nil {
+		t.Fatal("cannot open test PostgreSQL")
+	}
+	token, err := storeID("test_minicoco_")
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	if _, err := db.ExecContext(ctx, "CREATE SCHEMA "+token); err != nil {
+		db.Close()
+		t.Fatal("cannot create isolated PostgreSQL test schema", err)
+	}
+	t.Cleanup(func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		defer db.Close()
+		if _, err := db.ExecContext(ctx, "DROP SCHEMA "+token+" CASCADE"); err != nil {
+			t.Error(err)
+		}
+	})
+	q := u.Query()
+	q.Set("search_path", token)
+	u.RawQuery = q.Encode()
+	return u.String()
+}

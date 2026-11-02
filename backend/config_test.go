@@ -81,3 +81,32 @@ func TestLoadEnvQuotesAndDoesNotLeakMalformedValues(t *testing.T) {
 		t.Fatal("malformed config was accepted or its value leaked")
 	}
 }
+
+func TestLoadEnvPostgresConfiguration(t *testing.T) {
+	previous, present := os.LookupEnv("POSTGRES_URL")
+	os.Unsetenv("POSTGRES_URL")
+	t.Cleanup(func() {
+		if present {
+			os.Setenv("POSTGRES_URL", previous)
+		} else {
+			os.Unsetenv("POSTGRES_URL")
+		}
+	})
+	path := filepath.Join(t.TempDir(), ".env")
+	if err := os.WriteFile(path, []byte("POSTGRES_URL='postgres://fixture@localhost/test?sslmode=disable'\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if err := loadEnvFile(path); err != nil {
+		t.Fatal(err)
+	}
+	if os.Getenv("POSTGRES_URL") != "postgres://fixture@localhost/test?sslmode=disable" {
+		t.Fatal("PostgreSQL URL not loaded")
+	}
+	t.Setenv("POSTGRES_URL", "postgres://external@localhost/other")
+	if err := loadEnvFile(path); err != nil {
+		t.Fatal(err)
+	}
+	if os.Getenv("POSTGRES_URL") != "postgres://external@localhost/other" {
+		t.Fatal("environment overridden")
+	}
+}

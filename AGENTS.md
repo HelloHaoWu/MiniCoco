@@ -1,6 +1,6 @@
 # MiniCoco Agent Harness 仓库约定
 
-最后更新：2026-10-28（Asia/Shanghai）。目标是逐步完善 MiniCoco Agent Harness，保证模型请求、工具执行和会话状态具有明确的成功、失败及取消语义。
+最后更新：2026-11-02（Asia/Shanghai）。目标是逐步完善 MiniCoco Agent Harness，保证模型请求、工具执行和会话状态具有明确的成功、失败及取消语义。
 
 ## 研发与维护规则
 
@@ -11,7 +11,7 @@
 - 工具增加/升级需使用 name__vN.json 与 availableVersion，更新后端注册顺序、模式策略及客户端 Handler/策略。模式必须贯穿请求、重试和执行；完整批次检查在任何本地副作用之前完成。同轮不得变更模式，默认 full 保留旧轮次指纹。模式不是鉴权或 OS 沙箱。
 - 工具结果先校验完整身份再按请求顺序格式化并落库。Native 保留旧字段/错误前缀；XML 必须转义文本并限制标签名称，按转义后的 Go JSON 最坏体积预留预算。已持久化结果的会话不得混用格式；默认 Native 指纹保持兼容。完整 prompt 调试默认关闭，仅在显式开关下输出本地 stderr，日志不得提交。
 - 模型路由集中在 models.json / models.go，提示词、formatter 与传输共用单轮快照。修改路由须同步模型能力/提示词测试和配置迁移说明；maxTokens 用于 v2 上下文估算预算，不得误用作输出 max_tokens。未知模型在创建会话前拒绝，成功轮回放不调用供应商。模型规格须查官方资料，项目配置与实际供应商能力分开描述。
-- 新单轮实现须通过 registerLoop 注册，保留 context 取消、固定 roundId 幂等、完整批次持久化后再暴露及统一失败结束边界；SSE/JSON 共用分流。空/未知 LOOP_IMPL 回退 v1，未实现的压缩能力不得宣称可用。相同 family/mode/agentType/slash/Schema（含 MCP 目录） 的 system/tools 须与工作区和历史无关，记忆索引不变时追加消息不改已有前缀；诊断 hash/模拟缓存不能当作真实命中或收益证据。
+- 新单轮实现须通过 registerLoop 注册，保留 context 取消、固定 roundId 幂等、完整批次持久化后再暴露及统一失败结束边界；SSE/JSON 共用分流。空 LOOP_IMPL 默认 v2，未知名称回退 v1，未实现的压缩能力不得宣称可用。相同 family/mode/agentType/slash/Schema（含 MCP 目录） 的 system/tools 须与工作区和历史无关，记忆索引不变时追加消息不改已有前缀；诊断 hash/模拟缓存不能当作真实命中或收益证据。
 - 压缩只能改变模型视图，RawLatest 保留原始幂等、工具身份和计数；保存摘要必须校验完整批次边界及源指纹，独立去重摘要 usage 并支持回写恢复，不能用 Latest 的压缩长度更新原始账本。
 - 每个 Part 达到对应行为验收要求后才标记完成；执行统一检查，区分历史验证与本次新运行结果。真实库验收使用 check_realdb.sh 并显式指定测试服务；缺少服务的 skip 不算验收通过。
 - 在本工作区，每完成一个 Part 并通过验收，检查更新两层 AGENTS、完成上层 ChangeLog 及索引后，自动提交该 Part 的相关代码和仓库内文档并推送 GitHub 一次，用户已授权，无需逐次询问。提交前检查 diff/暂存范围，只提交相关改动，核实目标分支，不强推、不自动合并 PR。如实记录提交号及推送结果。
@@ -29,7 +29,7 @@
 - backend/toolresult.go：Formatter、NativeFormatter、XmlFormatter、完整批次身份校验、请求顺序、已存格式识别及结果预算；prompt.go 在 MINICOCO_DEBUG_PROMPT=1 时输出完整 messages。toolresult_test.go、client/src/toolresult.test.ts 和真实档专项覆盖两轨落库/恢复/回放。
 - backend/sessions.go：稳定首轮会话、已提交历史、输入/预占、模型调用、final 和元数据回写、成功事件回放；session_http.go 提供列表和恢复元数据。
 - backend/store.go：MetaStore / TranscriptStore / Coordinator 三接口。默认 metastore_json.go、transcript_jsonl.go、transcript_rounds.go、coord_inproc.go 实现 JSON 元数据、原子 JSONL 轮次、进程内协调；store_files.go 负责 ID 与原子文件写入。
-- backend/wire_stores.go / wire_file.go / wire_realdb.go：按 STORE_BACKEND=file|real 装配，默认 file；未编入 realdb 的程序选择 real 时明确报错。metastore_sqlite_realdb.go、transcript_mongo_realdb.go、coord_redis_realdb.go 为可选实现；emitter.go 串行化本地/Redis 对 SSE 的投递。
+- backend/wire_stores.go / wire_file.go / wire_realdb.go：按 STORE_BACKEND=file|real 装配，默认 file；未编入 realdb 的程序选择 real 时明确报错。metastore_postgres_realdb.go、transcript_mongo_realdb.go、coord_redis_realdb.go 为可选实现；emitter.go 串行化本地/Redis 对 SSE 的投递。
 - backend/store_contract_test.go：两档共用接口用例；stores_realdb_test.go：真实服务、并发唯一键、用量、跨进程协调及 HTTP/CLI 验收。默认 go.mod 为 Go 1.22、零第三方模块；go.realdb.mod / .sum 锁定可选驱动，要求 Go ≥ 1.26。
 - client/src/：TypeScript CLI 和本地 Agent 循环。conversation.ts 只持有 sessionId/未确认增量并执行工具，sessions.ts 获取列表和恢复信息；executor.ts 校验事件，roundError.ts 定义错误，retry.ts 负责固定 roundId 重试和可取消退避，sse.ts 解析有界 SSE；tools/ 实现文件、搜索及命令工具。
 - client/src/toolMode.ts 与 toolMode.test.ts：模式策略及两端协议消费/执行/CLI 回归；client/scripts/test.ts 为各测试文件启动独立进程，进程内直接运行 Node 原生测试，避开当前 Node 24.19.0 的内部 V8/stdout 转发缺陷；不移除文件级进程隔离。npm test 使用此入口，类型检查包括 scripts/。
@@ -54,9 +54,9 @@ LOOP_IMPL 默认/空为 v2，未注册键回退 v1；环境和 .env 支持，环
 
 默认文件档 data/ 相对后端 cwd（启动脚本为 backend/data/），MINICOCO_DATA_DIR 可设绝对路径，每目录仅一个写入实例。JSONL 整文件原子替换，协调器只在进程内生效。部署须持久化数据目录。
 
-真实档 SQLite 保存 meta.sqlite，WAL 和事务保障轮次账本/用量原子更新；Mongo 每轮一个原子文档，唯一 (sessionId,roundId)，保存输入、pending/final、事件、usage 和顺序；正文 JSON 字节保留字段与整数精度。auto_llm_message / auto_llm_summary / auto_llm_sequence 分别保存轮次、摘要和顺序。两库没有跨库事务，仍以 transcript final 恢复元数据。两档无自动数据迁移。
+真实档 PostgreSQL 通过必填 POSTGRES_URL 连接，事务保障轮次账本/用量原子更新；Mongo 每轮一个原子文档，唯一 (sessionId,roundId)，保存输入、pending/final、事件、usage 和顺序；正文 JSON 字节保留字段与整数精度。auto_llm_message / auto_llm_summary / auto_llm_sequence 分别保存轮次、摘要和顺序。两库没有跨库事务，仍以 transcript final 恢复元数据。两档无自动数据迁移。
 
-Redis 提供 TTL 锁、Lua CAS 解锁、固定窗口限流和 feature_toggle 开关；inbox 订阅匹配本节点 X-Emitter-Id 并投递 SSE。Pub/Sub 是实时至多一次投递，不能替代存储或任务队列；只有可信后端可发布已授权且按需持久化的事件，模型仍在接收节点运行。共享业务数据的实例须使用同一 SQLite 文件、Mongo 数据库和 Redis 前缀；SQLite 多进程共享只支持本机本地磁盘方案，未实现跨机器控制面。
+Redis 提供 TTL 锁、Lua CAS 解锁、固定窗口限流和 feature_toggle 开关；inbox 订阅匹配本节点 X-Emitter-Id 并投递 SSE。Pub/Sub 是实时至多一次投递，不能替代存储或任务队列；只有可信后端可发布已授权且按需持久化的事件，模型仍在接收节点运行。共享业务数据的实例须使用同一 PostgreSQL 数据库/schema、Mongo 数据库和 Redis 前缀；元数据不再依赖同主机文件，跨机器控制面和生产部署仍未完整验证。
 
 --list / --resume 使用后端元数据和历史。同进程保留的工具结果可续传；退出后若存在未完成工具批次，拒绝自动重放。无跨进程工具执行日志、外部副作用 exactly-once 或回滚。SSE/JSON 共用流式上游；瞬时故障最多 8 次流式 + 1 次 JSON，fatal/取消不兜底。v2 已实现主动/反应式压缩、摘要合并和最多 3 次进度保证；v1 不自动压缩。
 
@@ -71,6 +71,8 @@ Redis 提供 TTL 锁、Lua CAS 解锁、固定窗口限流和 feature_toggle 开
 
 当前研发阶段：Phase 1—10 全部现有 Part 已通过对应本地验收。Phase 10 Part 3 已完成默认及真实数据库档验收，Part 3 发布见上层 ChangeLogs/2026-10-28-002-phase10-part3-metrics-constraints-eval.md；最新默认开启维护见 003 记录。预压、复用及读取快照已按用户要求默认开启（v2 / 0.60）；提供命中/delta/同步兜底、读取优化及可观测度量。确定性摘要质量 eval 已通过，真实模型语义质量、供应商缓存命中和长期性能收益仍未验证。
 
+最新维护（2026-11-02）：真实档元数据层替换为 PostgreSQL，MongoDB、Redis 及默认零依赖文件档保留；验收与发布见 ChangeLogs/2026-11-02-001-postgres-metastore.md。历史 Phase 表中的 SQLite 为当时实现。
+
 从仓库根目录执行，默认要求 Go ≥ 1.22、Node ≥ 24：
 
 ```bash
@@ -83,13 +85,22 @@ LLM_PROVIDER=mock bash run_backend.sh
 ./run_client.sh "检查项目" --workspace /path/to/workspace --mode readonly
 ```
 
-真实档要求 Go ≥ 1.26，先准备 MongoDB / Redis 并设置连接配置：
+真实档要求 Go ≥ 1.26，先准备 PostgreSQL / MongoDB / Redis 并设置连接配置：
 
 ```bash
+# 先在 .env 或环境中设置 POSTGRES_URL、MONGO_URI、REDIS_URL
 STORE_BACKEND=real LLM_PROVIDER=mock bash run_backend_realdb.sh
-MINICOCO_TEST_MONGO_URI=mongodb://127.0.0.1:27017 MINICOCO_TEST_REDIS_URL=redis://127.0.0.1:6379/0 bash check_realdb.sh
+MINICOCO_TEST_POSTGRES_URL='postgres://minicoco:password@127.0.0.1:5432/minicoco_test?sslmode=disable' MINICOCO_TEST_MONGO_URI=mongodb://127.0.0.1:27017 MINICOCO_TEST_REDIS_URL=redis://127.0.0.1:6379/0 bash check_realdb.sh
 # 手动构建在 backend/：go build -modfile=go.realdb.mod -tags realdb .
 ```
+
+## PostgreSQL 元数据层（2026-11-02）
+
+- backend/metastore_postgres_realdb.go 替换 SQLite 实现；realdb 构建独立依赖 pgx/v5 v5.8.0，默认 go.mod 不增加任何模块。POSTGRES_URL 为 real 档必填配置，支持 .env，导出环境优先；数据库/schema 需预先创建，启动账号需建表/索引权限。
+- 每实例连接池上限 16、空闲 4、寿命 30 分钟；启动事务 advisory lock 串行化同 schema 的 DDL。Read Committed 事务与唯一轮次账本避免重复记账，原子更新避免丢失计数，BIGINT 与溢出检查保持原语义。内部摘要 round_id 使用 BYTEA 保留 NUL。
+- 多个后端可连接同一 PostgreSQL 数据库/schema，不要求共享 SQLite 文件；同会话仍串行，PostgreSQL 与 Mongo 仍无跨库事务，以 final/摘要和去重账本恢复中断回写。不宣称已验证跨机器部署或吞吐提升。
+- 新 real 档不再读取旧 meta.sqlite；不删除原文件、不自动迁移、不修改用户 .env 或现有服务。已有 real 会话须停写、备份并迁移五张元数据表，核对账本/类型后与原 Mongo/Redis 配套切换，详见产品 README；默认 file 不受影响。
+- 真实验收新增必填 MINICOCO_TEST_POSTGRES_URL，测试创建随机 PostgreSQL schema、Mongo 数据库和 Redis 前缀，仅清理自身资源；另覆盖并发建表、双连接池、不同轮次并发、NUL 摘要 ID、溢出事务回滚、不同会话行锁隔离、取消和独立进程去重/重开。本次默认 check.sh 与真实 check_realdb.sh 均通过：Go -race/vet/构建、默认零依赖、真实档无 cgo 及驱动包含/SQLite 排除检查，Go 覆盖率分别 84.1% / 83.4%；TS 类型检查、10 项工具自测和 73 项客户端测试通过。PostgreSQL 18.0 / MongoDB 8.0.16 / Redis 临时服务参与真实验收；未测生产吞吐或真实模型。发布状态见本批 ChangeLog。
 
 ## Phase 5 实现与历史验收（2026-10-26）
 

@@ -5,7 +5,7 @@
 - **backend/**（Go）= 会话与历史的持有者。接收每轮增量，保存元数据和 transcript，预占模型回复、组装提示词并调用模型；成功落盘后才返回完整工具批次和成功结束事件。默认 SSE，也支持一次性 JSON 返回同一事件序列。后端写自己的会话数据目录，不执行工作区工具。
 - **client/**（TypeScript）= 驱动 **Agent 工具循环**，在本地读写工作区、执行命令和搜索。仅保存 sessionId 与尚未确认的一轮增量，不持有全量历史；发送 query 或 toolUseResults，消费 SSE/JSON，执行完整工具批次，直到模型完成。
 
-当前架构是**工具循环在客户端，会话主权与持久化在后端**。前后端通过 HTTP 请求和 SSE/JSON 返回通信。默认档后端仅依赖 Go 标准库，客户端运行时仅使用 Node 内置模块；可选 `realdb` 档引入 SQLite、MongoDB 和 Redis 驱动。
+当前架构是**工具循环在客户端，会话主权与持久化在后端**。前后端通过 HTTP 请求和 SSE/JSON 返回通信。默认档后端仅依赖 Go 标准库，客户端运行时仅使用 Node 内置模块；可选 `realdb` 档引入 PostgreSQL、MongoDB 和 Redis 驱动。
 
 ```
 用户提问 -(client/TS)-> sessionId + roundId + query -> 后端存储/预占 -> 拼 prompt+tools -> 调LLM
@@ -290,6 +290,7 @@ go list -m all  # 默认仅 minicoco，无第三方模块
 # 仓库根目录；数据库地址也可放在被忽略的 .env 中
 STORE_BACKEND=real \
 MINICOCO_DATA_DIR=/absolute/path/to/minicoco-real-data \
+POSTGRES_URL='postgres://minicoco:password@127.0.0.1:5432/minicoco?sslmode=disable' \
 MONGO_URI=mongodb://127.0.0.1:27017 \
 MONGO_DATABASE=minicoco \
 REDIS_URL=redis://127.0.0.1:6379/0 \
@@ -304,24 +305,29 @@ CGO_ENABLED=0 go build -modfile=go.realdb.mod -tags realdb -o /tmp/minicoco-real
 
 | 接口 | 真实档实现 | 持久化与并发边界 |
 | --- | --- | --- |
-| MetaStore | SQLite，`MINICOCO_DATA_DIR/meta.sqlite` | WAL、参数化 SQL、用量账本和计数同事务提交；消息索引支持点赞 |
+| MetaStore | PostgreSQL，必填 `POSTGRES_URL` | 有界连接池、行级并发写入、用量账本和计数同事务提交；消息索引支持点赞 |
 | TranscriptStore | MongoDB `auto_llm_message`、`auto_llm_summary` | 唯一 `(sessionId,roundId)`；每轮输入、pending/final、事件和 usage 存在同一原子文档；`auto_llm_sequence` 保证读取顺序 |
 | Coordinator | Redis | SET NX + TTL、Lua CAS 解锁、固定窗口限流、GET 开关及 Pub/Sub inbox |
 
-Mongo 以**一轮一个文档**实现多消息原子提交，避免原设计伪代码中多条消息竞争同一个唯一键。消息正文保存为 JSON 字节以保留字段形状和整数精度，轮次、状态、顺序和用量保留 BSON 字段；无需 Mongo 副本集事务。SQLite 与 Mongo 没有跨库事务，仍由 transcript final 和 SQLite 轮次账本恢复中断的元数据回写。
+Mongo 以**一轮一个文档**实现多消息原子提交，避免原设计伪代码中多条消息竞争同一个唯一键。消息正文保存为 JSON 字节以保留字段形状和整数精度，轮次、状态、顺序和用量保留 BSON 字段；无需 Mongo 副本集事务。PostgreSQL 与 Mongo 没有跨库事务，仍由 transcript final 和 PostgreSQL 轮次账本恢复中断的元数据回写。
 
-Redis 开关键为 `<REDIS_PREFIX>feature_toggle:<key>`，默认前缀 `minicoco:`；真实档从 Redis 读取，不使用文件档的环境变量回退。共享业务数据的实例必须使用相同 Mongo 数据库、Redis 前缀和同一 SQLite 数据文件；多进程 SQLite 应位于同一主机的本地磁盘。**这不是跨机器共享 SQLite 文件的部署方案**。
+Redis 开关键为 `<REDIS_PREFIX>feature_toggle:<key>`，默认前缀 `minicoco:`；真实档从 Redis 读取，不使用文件档的环境变量回退。共享业务数据的实例必须使用同一 PostgreSQL 数据库/schema、Mongo 数据库和 Redis 前缀。元数据不再依赖同主机共享文件；这为多主机后端接入提供条件，但鉴权、跨机器控制面、客户端工作区和生产部署仍需独立完善与验证。单会话锁仍串行化该会话的轮次。
 
 SSE 响应提供 `X-Emitter-Id`，本节点登记的 emitter 接收 `<REDIS_PREFIX>inbox` 事件。`Coordinator.Publish` 编码 `{emitterId,chunk}`，其中 chunk 是一个 Event JSON 的字节数组（外层编码为 base64）；所有订阅节点只向本地匹配 emitter 投递，并串行化本地与远端写入。发布方必须是可信后端，保证工具/完成事件已授权并持久化。Pub/Sub 是实时、至多一次投递，断连会丢事件，不能替代 transcript、任务队列或成功提交确认；目前模型请求仍在接收请求的节点运行。
 
 真实服务验收需要显式测试地址，脚本不会把未连接服务的跳过结果当作验收通过：
 
 ```bash
+MINICOCO_TEST_POSTGRES_URL='postgres://minicoco:password@127.0.0.1:5432/minicoco_test?sslmode=disable' \
 MINICOCO_TEST_MONGO_URI=mongodb://127.0.0.1:27017 \
 MINICOCO_TEST_REDIS_URL=redis://127.0.0.1:6379/0 bash check_realdb.sh
 ```
 
-测试新建随机命名的数据库和 Redis 前缀并清理自身数据，SQLite 使用临时目录；建议使用专用测试服务。脚本运行两档共同接口用例、并发唯一键/用量测试、两个独立进程的锁竞争与 inbox 投递、真实 HTTP SSE 和 CLI 恢复/回放，随后执行 vet、无 cgo 构建并核验驱动确实进入产物。默认 `bash check.sh` 无需数据库；默认依赖也可单独运行 `bash check_default_deps.sh` 检查。
+测试新建随机命名的 PostgreSQL schema、Mongo 数据库和 Redis 前缀，仅清理自身数据；测试 PostgreSQL 账号需 CREATE SCHEMA 权限，使用专用测试数据库。脚本运行两档共同接口用例、并发唯一键/用量测试、两个独立进程的锁竞争与 inbox 投递、真实 HTTP SSE 和 CLI 恢复/回放，随后执行 vet、无 cgo 构建并核验驱动确实进入产物。默认 `bash check.sh` 无需数据库；默认依赖也可单独运行 `bash check_default_deps.sh` 检查。
+
+PostgreSQL 必须预先创建数据库和应用账号，首次启动需在目标 schema 建表/建索引权限；可通过连接 URL 的 search_path 指定预建专用 schema。每实例最多 16 个连接、4 个空闲连接，最大连接寿命 30 分钟；部署总连接数应结合实例数量配置数据库容量。事务显式使用 Read Committed，唯一 (session_id,round_id) 约束负责去重，原子 UPDATE 避免丢失计数；内部摘要 ID 使用 BYTEA，保留 NUL 前缀。启动 DDL 使用事务级 advisory lock 防止多实例并发建表竞争。远程部署应配置 TLS（如 sslmode=verify-full）与证书，示例 disable 仅用于本机测试。
+
+**旧 SQLite 数据不自动迁移**：新版本 real 档不再读取 meta.sqlite，旧文件保持原样。已有 real 会话升级时，应停写并备份 PostgreSQL 迁移目标、SQLite、MongoDB，迁移 session、session_link、session_fork、msg_index、usage_round 五张表并核对记录数、BIGINT/BOOLEAN、二进制 round_id 和用量账本后切换；不能仅接上旧 Mongo 就认为旧会话已经恢复。当前未提供自动迁移工具；需要继续访问未迁移历史时使用升级前版本及其原存储。默认 file 档不受影响。MINICOCO_DATA_DIR 在 real 档继续存放本节点 trace/audit 等本地文件。
 
 ### 5）运行结果、取消与资源限制
 
@@ -354,7 +360,7 @@ MiniCoco/
 │   ├── transcript_rounds.go      #   原子轮次预占、final 事件和用量检查点
 │   ├── coord_inproc.go           #   进程内 TTL 锁、固定窗口限流与开关
 │   ├── wire_stores.go / wire_*.go #   file/real 装配与构建档隔离
-│   ├── *_realdb.go               #   SQLite / MongoDB / Redis 可选实现和测试
+│   ├── *_realdb.go               #   PostgreSQL / MongoDB / Redis 可选实现和测试
 │   ├── emitter.go                #   本地 SSE registry 与 inbox 事件投递
 │   ├── store_contract_test.go    #   两档复用的接口验收
 │   ├── go.mod                    #   默认 Go 1.22、零第三方模块
@@ -394,7 +400,7 @@ MiniCoco/
 
 ## 关键取舍
 
-- **历史放后端**：服务端从持久化 transcript 读取历史，客户端只提交增量；三个接口分离元数据、正文与协调。默认 JSON/JSONL/进程内实现便于离线运行，可选 SQLite/MongoDB/Redis 档保留同样的轮次和去重语义。
+- **历史放后端**：服务端从持久化 transcript 读取历史，客户端只提交增量；三个接口分离元数据、正文与协调。默认 JSON/JSONL/进程内实现便于离线运行，可选 PostgreSQL/MongoDB/Redis 档保留同样的轮次和去重语义。
 - **原生 function calling**：直接用模型的 `tools` / `tool_calls`。真实前后端设计 还支持 XML 风格工具协议、prompt cache、ABTest 分流等。
 - **逐步完善实现**：已实现模型请求重试、一次性 JSON 兜底、会话持久化/恢复、可选真实库档、工具版本/模式、Native/XML 结果回填、按模型名路由/模型族提示词、单轮实现注册、静态前缀验收和可选 v2 上下文工程；Phase 6—9 已增加 trace/usage、审批审计、进程资源保护、子 Agent、后台任务、分叉、slash 场景、stdio MCP 和工作区记忆。尚未实现 XML 工具调用解析和通用按任务自动选模。使用明确的预算和失败状态控制基本边界。
 - **工具集**：八个内建工具和显式配置的 MCP 工具。新增工具时提供带版本/元数据的 JSON，更新后端 ToolName、固定顺序与模式策略，并在客户端增加 Handler、注册表和模式策略，补齐两端回归；仅放一个 JSON 不会自动开放执行。
